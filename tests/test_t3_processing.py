@@ -1,5 +1,5 @@
-from constants import UNMATCHED
-from t3_processing import resolve_t3
+from transformer_datasets.constants import UNMATCHED
+from transformer_datasets.t3_processing import resolve_t3
 
 
 def test_resolve_t3_all_same():

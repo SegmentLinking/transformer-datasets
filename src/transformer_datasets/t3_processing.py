@@ -12,8 +12,8 @@ from torch_geometric.data import Data
 
 import random
 
-from constants import SIM_VARS, T3_VARS, T3_HIT_SIMIDX, T3_HIT_LAYER, T3_PMATCHED, LS_INDEX, LS_VARS, MD_VARS, MD_INDEX
-from constants import TARGET, FAKE_TARGET, LAYER_INFO, MD_SIMIDX, ALL_COLUMNS, MIN_T3_PT, MAX_T3_PT, UNMATCHED
+from transformer_datasets.constants import SIM_VARS, T3_VARS, T3_HIT_SIMIDX, T3_HIT_LAYER, T3_PMATCHED, LS_INDEX, LS_VARS, MD_VARS, MD_INDEX
+from transformer_datasets.constants import TARGET, FAKE_TARGET, LAYER_INFO, MD_SIMIDX, ALL_COLUMNS, MIN_T3_PT, MAX_T3_PT, UNMATCHED
 
 
 class GraphBuilder:
