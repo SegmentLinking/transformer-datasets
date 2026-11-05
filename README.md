@@ -48,6 +48,7 @@ The CPU build of torch is enough. Graph building doesn't use a GPU.
 Run from the directory where the outputs should go. For example:
 
 ```bash
+# voms-proxy-init -voms cms, if necessary
 cd samples/qcd/
 for F in $(cat relval.txt); do ../../cmssw/trackingntuple_maker.sh $F; done
 ```
