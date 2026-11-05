@@ -8,7 +8,7 @@
 # Safe to rerun: inputs whose output already exists are skipped.
 #
 # Run everything in a loop like:
-# while read F; do ./lstntuple_maker.sh "$F"; done < lstntuple_maker.txt
+# for F in $(cat trackingntuple.txt); do ./lstntuple_maker.sh "${F}"; done
 
 set -eo pipefail
 

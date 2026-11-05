@@ -39,31 +39,26 @@ pip install --upgrade pip
 pip install -e .
 ```
 
-The CPU build of torch is enough; graph building doesn't use a GPU.
+The CPU build of torch is enough. Graph building doesn't use a GPU.
 
 ## Usage
 
 ### 1. Tracking ntuples
 
-Run from the directory where the outputs should go. Each output is named `trackingntuple_<basename of input>`, and existing outputs are skipped.
+Run from the directory where the outputs should go. For example:
 
 ```bash
-mkdir -p qcd_trackingntuple
-cd qcd_trackingntuple
-while read -r F; do /path/to/transformer-datasets/cmssw/trackingntuple_maker.sh "${F}"; done < /path/to/transformer-datasets/samples/qcd/relval.txt
+cd samples/qcd/
+for F in $(cat relval.txt); do ../../cmssw/trackingntuple_maker.sh $F; done
 ```
-
-Optional environment variables: `NEVENTS` (default: all), `NTHREADS` (default: 8), `PILEUP_INPUT` (must match the pileup the step2 files were mixed with).
 
 ### 2. LST ntuples
 
-`lstntuple_parallel.sh` runs `lstntuple_maker.sh` over every file listed in `lstntuple_maker.txt` in the current directory, at most `MAXJOBS` (default: 10) at a time. Outputs are `LSTNtuple_<name>.root`, with the LST log in `LSTNtuple_<name>.txt`.
+`lstntuple_parallel.sh` runs `lstntuple_maker.sh` over every file listed in `trackingntuple.txt` in the current directory. Outputs are `LSTNtuple_<name>.root`. For example:
 
 ```bash
-mkdir -p qcd_lstntuple
-cd qcd_lstntuple
-cp /path/to/transformer-datasets/samples/qcd/trackingntuple.txt lstntuple_maker.txt
-/path/to/transformer-datasets/cmssw/lstntuple_parallel.sh
+cd samples/qcd/
+../../cmssw/lstntuple_parallel.sh
 ```
 
 ### 3. Graphs
@@ -74,17 +69,7 @@ python -m transformer_datasets.t3_processing --input qcd_lstntuple/LSTNtuple_*.r
 
 Run with `--help` for all options (`--n_events`, `--split`, `--nofakes`, `--overwrite`, ...).
 
-Each `graph_<N>.pt` is a `torch_geometric.data.Data` with no edges:
-
-| Attribute      | Shape          | Content |
-| -------------- | -------------- | ------- |
-| `x`            | `[N_T3, 49]`   | T3 features: 3 T3 (pT, η, φ), 2 × 5 LS, 4 × 9 MD (see `constants.py`) |
-| `sim_index`    | `[N_T3]`       | matched sim-track index, negative for fake/unmatched |
-| `sim_features` | `[N_sim, 8]`   | sim-track features (`SIM_VARS`) |
-| `md_layer`     | `[N_T3, 4]`    | layer of each MD |
-| `md_simIdx`    | `[N_T3, 4]`    | sim index of each MD |
-| `hit_layer`    | `[N_T3, 6]`    | layer of each hit |
-| `hit_simIdx`   | `[N_T3, 6]`    | sim index of each hit, resolved to one per hit (`UNMATCHED` = -999) |
+Each `graph_<N>.pt` is a `torch_geometric.data.Data`.
 
 transformer-oc depends on the column order of `x`: if you add, remove or reorder features, update the normalization and the η/φ column indices there too.
 
