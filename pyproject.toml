@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transformer-datasets"
+version = "0.1.0"
+description = "Convert CMS Phase-2 LST ntuples into PyTorch Geometric datasets for transformer-oc"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "awkward>=2",
+    "black",
+    "numpy",
+    "pandas",
+    "pytest",
+    "torch",
+    "torch_geometric",
+    "uproot>=5",
+]
+
+[project.urls]
+Repository = "https://github.com/SegmentLinking/transformer-datasets"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

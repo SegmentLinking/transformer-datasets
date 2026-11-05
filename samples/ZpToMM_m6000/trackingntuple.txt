@@ -1,0 +1,10 @@
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_02468e42-5c03-432d-8ea0-b2c82650037b.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_0448e7d8-70a3-42f4-97f8-2bfdbc37fccd.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_044f24a2-b114-4653-a478-a7f2fe76f81a.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_04dcce66-fdff-4c0b-85f4-21f785c081ce.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_0571731b-972c-4996-b1a1-539f819bfa16.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_05c545c5-f696-4616-bdf4-605310f3c726.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_071cc87b-cb74-453b-bee5-8c81e0fcc0aa.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_077fe640-29ce-4d9d-9562-42bc06190197.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_0b7cb1f2-93be-478b-84f7-b57e967211cd.root
+/ceph/users/atuna/CMSSW_20_1_0_pre2/src/ZpToMM_m6000_trackingntuple/trackingntuple_0c1d7a02-c413-4f3e-9b06-52981e3e99fa.root

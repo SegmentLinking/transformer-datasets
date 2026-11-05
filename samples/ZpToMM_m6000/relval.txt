@@ -1,0 +1,10 @@
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/02468e42-5c03-432d-8ea0-b2c82650037b.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/0448e7d8-70a3-42f4-97f8-2bfdbc37fccd.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/044f24a2-b114-4653-a478-a7f2fe76f81a.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/04dcce66-fdff-4c0b-85f4-21f785c081ce.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/0571731b-972c-4996-b1a1-539f819bfa16.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/05c545c5-f696-4616-bdf4-605310f3c726.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/071cc87b-cb74-453b-bee5-8c81e0fcc0aa.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/077fe640-29ce-4d9d-9562-42bc06190197.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/0b7cb1f2-93be-478b-84f7-b57e967211cd.root
+/ceph/cms/store/user/mmasciov/nfs-7/RelValZpToMM_m6000_PU_150X_mcRun4_realistic_v1_STD_D121_RegeneratedGS_PU/0c1d7a02-c413-4f3e-9b06-52981e3e99fa.root
