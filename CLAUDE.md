@@ -37,7 +37,6 @@ Dependencies are declared in `pyproject.toml`; add new ones there rather than as
 - **The graph format is a contract with transformer-oc.** Its `src/constants.py` and `src/dataset.py` hardcode the 49-column layout of `x` (normalization ranges, η/φ in columns 1 and 2). Changing features here needs a matching change there.
 - `t3_processing.py` checks its recomputed `t3_pMatched` against the ntuple and raises on mismatch; the exception is caught per event and printed, so a failing event is skipped rather than stopping the job.
 - `trackingntuple_maker.sh`'s `PILEUP_INPUT` must match the pileup the step2 files were mixed with.
-- `lstntuple_parallel.sh` reads `lstntuple_maker.txt` from the current directory, not a `samples/` list.
 
 ## Workflow
 

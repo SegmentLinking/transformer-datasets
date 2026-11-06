@@ -65,7 +65,8 @@ cd samples/qcd/
 ### 3. Graphs
 
 ```bash
-python -m transformer_datasets.t3_processing --input qcd_lstntuple/LSTNtuple_*.root --output qcd_graphs/ --seed 42 -n 16
+cd samples/qcd/
+python -m transformer_datasets.t3_processing --input LSTNtuple_*.root --output graphs/ --seed 42 -n 16
 ```
 
 Run with `--help` for all options (`--n_events`, `--split`, `--nofakes`, `--overwrite`, ...).
