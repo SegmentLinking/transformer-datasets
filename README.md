@@ -66,7 +66,7 @@ cd samples/qcd/
 
 ```bash
 cd samples/qcd/
-python -m transformer_datasets.t3_processing --input LSTNtuple_*.root --output graphs/ --seed 42 -n 16
+python -m transformer_datasets.t3_processing --input LSTNtuple_*.root --output graphs/ --seed 42
 ```
 
 Run with `--help` for all options (`--n_events`, `--split`, `--nofakes`, `--overwrite`, ...).
@@ -74,6 +74,16 @@ Run with `--help` for all options (`--n_events`, `--split`, `--nofakes`, `--over
 Each `graph_<N>.pt` is a `torch_geometric.data.Data`.
 
 transformer-oc depends on the column order of `x`: if you add, remove or reorder features, update the normalization and the η/φ column indices there too.
+
+### 3b. MD datasets (experimental)
+
+An alternative to the T3 graphs, with one node per outer-tracker MD instead of per T3:
+
+```bash
+python -m transformer_datasets.md_processing --input LSTNtuple_*.root --output md_events/ --seed 42
+```
+
+Each `event_<N>.pt` is a plain dict of tensors (no PyG), loadable with `torch.load(path, weights_only=True)`. See the module docstring for the keys.
 
 ## Tests
 
