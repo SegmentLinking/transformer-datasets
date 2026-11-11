@@ -3,20 +3,36 @@ import numpy as np
 
 from transformer_datasets.constants import UNMATCHED
 from transformer_datasets.md_processing import (
+    K2RINV_1GEV,
+    anchor_is_inner,
     hit_sim_pairs,
-    inner_is_other,
     md_features,
     md_sim_features,
+    md_track_estimates,
     order_hits,
 )
 
 
-def test_inner_is_other():
+def test_anchor_is_inner():
     # barrel MD with the anchor outside, endcap MD with the anchor inside
     anchor = np.array([[30.2, 0.0, 1.0], [50.0, 0.0, 150.0]])
     other = np.array([[30.0, 0.0, 5.0], [40.0, 0.0, 150.4]])
-    swap = inner_is_other(anchor=anchor, other=other, layer=np.array([2, 7]))
-    assert np.array_equal(swap, [True, False])
+    anchor_inner = anchor_is_inner(anchor=anchor, other=other, layer=np.array([2, 7]))
+    assert np.array_equal(anchor_inner, [False, True])
+
+
+def test_anchor_is_inner_tie_keeps_anchor_inner():
+    hit = np.array([[30.0, 0.0, 1.0]])
+    assert anchor_is_inner(anchor=hit, other=hit, layer=np.array([3]))[0]
+
+
+def test_anchor_is_inner_rejects_unknown_layer():
+    hit = np.array([[30.0, 0.0, 1.0]])
+    try:
+        anchor_is_inner(anchor=hit, other=hit, layer=np.array([0]))
+    except ValueError:
+        return
+    raise AssertionError("layer 0 should raise ValueError")
 
 
 def test_hit_sim_pairs():
@@ -85,3 +101,16 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             func()
             print(f"{name}: passed")
+
+
+def test_md_track_estimates():
+    # anchor at rt = 50 cm; a positive 2 GeV track has q/pT = 0.5, i.e. dphichange = -asin(K * 50 * 0.5) in LST's
+    # convention; a straight MD (dphichange = 0) gives q/pT = 0
+    anchor = np.array([[30.0, 40.0, 10.0], [30.0, 40.0, 10.0]])
+    dphichange = np.array([-np.arcsin(K2RINV_1GEV * 50.0 * 0.5), 0.0])
+    estimates = md_track_estimates(
+        eta=np.array([0.2, -1.5]),
+        dphichange=dphichange,
+        anchor=anchor,
+    )
+    assert np.allclose(estimates, [[0.2, 0.5], [-1.5, 0.0]])
