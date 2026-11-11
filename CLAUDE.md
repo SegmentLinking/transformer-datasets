@@ -6,7 +6,7 @@ Dataset production for [transformer-oc](https://github.com/SegmentLinking/transf
 
 - `cmssw/`: bash scripts for the CMSSW stages. No pip dependencies: each script sets up CMSSW from `/cvmfs` and the release area in `CMSSW_SRC` if its tool (`cmsRun`, `lst_cpu`) isn't on the `PATH`. All are safe to rerun: existing outputs are skipped.
 - `samples/<sample>/`: file lists (`relval.txt` for step2 inputs, `trackingntuple.txt` for stage 1 outputs). Keep them as absolute paths, one per line; they record which files went into each dataset.
-- `src/transformer_datasets/`: the installable Python package. `t3_processing.py` is the graph builder, `constants.py` holds ntuple column names and cuts.
+- `src/transformer_datasets/`: the installable Python package. `t3_processing.py` is the graph builder, `constants.py` holds ntuple column names and cuts. `md_processing.py` is an experimental MD-level alternative: plain dicts of tensors, no PyG, with its own column lists.
 - `tests/`: pytest tests (plain asserts; the files also run as scripts without pytest).
 
 ## Environment
@@ -36,6 +36,7 @@ Dependencies are declared in `pyproject.toml`; add new ones there rather than as
 
 - **The graph format is a contract with transformer-oc.** Its `src/constants.py` and `src/dataset.py` hardcode the 49-column layout of `x` (normalization ranges, η/φ in columns 1 and 2). Changing features here needs a matching change there.
 - `t3_processing.py` checks its recomputed `t3_pMatched` against the ntuple and raises on mismatch; the exception is caught per event and printed, so a failing event is skipped rather than stopping the job.
+- `md_anchor_*` is not always the inner hit of an MD. `md_processing.py` orders hits by rT in the barrel and |z| in the endcap.
 - `trackingntuple_maker.sh`'s `PILEUP_INPUT` must match the pileup the step2 files were mixed with.
 
 ## Workflow
