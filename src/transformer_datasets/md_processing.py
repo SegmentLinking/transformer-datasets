@@ -10,6 +10,11 @@ torch.load(path, weights_only=True):
     hit_index:    int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
     hit_sim_pairs: int64  (n_pairs, 2): unique [hit index, sim index] pairs, one per sim of each hit of the kept
                   MDs, with no match-fraction cut. Hits with no sim have no pair.
+    source_path:  str: absolute path of the LSTNtuple the event was read from
+    source_entry: int: entry of the event in that LSTNtuple
+
+<output>/manifest.txt lists every planned event, one line each, as key=value:
+    event=event_0.pt set=train source_path=/abs/path/LSTNtuple_X.root source_entry=0
 
 rt, phi and z are those of the inner hit. dX is X(outer hit) - X(inner hit).
 eta and qoverpt are LST's own MD estimates: eta is md_eta (anchor hit), and qoverpt in GeV^-1 is the MD q/pT
@@ -54,15 +59,18 @@ K2RINV_1GEV = 2.99792458e-3 * 3.8 / 2
 
 def main() -> None:
     args = parse_args()
-    jobs = plan_jobs(
+    events = plan_events(
         input_paths=args.input,
         output=args.output,
         n_events=args.n_events,
-        split=args.split,
+        train=args.train,
+        val=args.val,
+        tune=args.tune,
+        test=args.test,
         seed=args.seed,
-        overwrite=args.overwrite,
     )
-    run_jobs(jobs=jobs, n_workers=args.n_workers)
+    write_manifest(events=events, output=args.output)
+    run_jobs(jobs=events, n_workers=args.n_workers)
 
 
 def parse_args() -> Namespace:
@@ -76,50 +84,114 @@ def parse_args() -> Namespace:
         default=-1,
         help="Events to process per input file (-1=all)",
     )
-    parser.add_argument("--split", type=float, default=0.8, help="Train fraction")
-    parser.add_argument("--seed", type=int, default=None, help="Seed for train/val")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite outputs")
+    parser.add_argument("--train", type=float, default=0.6, help="Training fraction")
+    parser.add_argument(
+        "--val",
+        type=float,
+        default=0.15,
+        help="Validation fraction (training loss, early stopping)",
+    )
+    parser.add_argument(
+        "--tune", type=float, default=0.05, help="Tuning fraction (harness thresholds)"
+    )
+    parser.add_argument(
+        "--test", type=float, default=0.2, help="Test fraction (reported numbers)"
+    )
+    parser.add_argument("--seed", type=int, default=None, help="Seed for the sets")
     return parser.parse_args()
 
 
-def plan_jobs(
+def plan_events(
     input_paths: list[str],
     output: str,
     n_events: int,
-    split: float,
+    train: float,
+    val: float,
+    tune: float,
+    test: float,
     seed: int | None,
-    overwrite: bool,
 ) -> list[tuple[str, int, str]]:
     """
-    One (input path, entry, output file) job per event, numbered event_0, event_1, ... across all inputs.
+    One (input path, entry, output file) per event, numbered event_0, event_1, ... across all inputs.
 
-    Every event's train/val split is decided up front, so it doesn't depend on which outputs already exist.
-    Events whose output exists in train/ or val/ are skipped unless overwrite is set.
+    train, val, tune and test are the fractions of events in each set (see assign_sets). Creates
+    <output>/{train,val,tune,test}, and raises FileExistsError if one exists: a production always starts from
+    scratch (no resuming), so the manifest and the files always come from the same run.
     """
-    train_path = os.path.join(output, "train")
-    val_path = os.path.join(output, "val")
-    os.makedirs(train_path, exist_ok=True)
-    os.makedirs(val_path, exist_ok=True)
-
-    rng = random.Random(seed)
-    jobs = []
-    idx = 0
+    sources = []
     for input_path in input_paths:
         with uproot.open(input_path) as f:
             n_entries = f["tree"].num_entries
         if n_events != -1:
             n_entries = min(n_entries, n_events)
-        for entry in range(n_entries):
-            split_path = train_path if rng.random() < split else val_path
-            name = f"event_{idx}.pt"
-            idx += 1
-            in_train = os.path.exists(os.path.join(train_path, name))
-            in_val = os.path.exists(os.path.join(val_path, name))
-            if (in_train or in_val) and not overwrite:
-                print(f"[skip] output={name} exists")
-                continue
-            jobs.append((input_path, entry, os.path.join(split_path, name)))
-    return jobs
+        sources.extend((input_path, entry) for entry in range(n_entries))
+
+    sets = assign_sets(
+        n_events=len(sources),
+        train=train,
+        val=val,
+        tune=tune,
+        test=test,
+        seed=seed,
+    )
+    os.makedirs(os.path.join(output, "train"))
+    os.makedirs(os.path.join(output, "val"))
+    os.makedirs(os.path.join(output, "tune"))
+    os.makedirs(os.path.join(output, "test"))
+    return [
+        (input_path, entry, os.path.join(output, name, f"event_{idx}.pt"))
+        for idx, ((input_path, entry), name) in enumerate(zip(sources, sets))
+    ]
+
+
+def assign_sets(
+    n_events: int,
+    train: float,
+    val: float,
+    tune: float,
+    test: float,
+    seed: int | None,
+) -> list[str]:
+    """
+    The set ("train", "val", "tune" or "test") of each event, shape (n_events,).
+
+    Exact sizes: round(fraction * n_events) events for val, tune and test, and the rest for train. Events are
+    shuffled with seed before the sets are cut, so the same seed and n_events always give the same sets.
+    """
+    if abs(train + val + tune + test - 1) > 1e-9:
+        raise ValueError(
+            f"set fractions must sum to 1, got train={train} val={val} tune={tune} test={test}"
+        )
+    n_val = round(val * n_events)
+    n_tune = round(tune * n_events)
+    n_test = round(test * n_events)
+    n_train = n_events - n_val - n_tune - n_test
+    labels = (
+        ["train"] * n_train + ["val"] * n_val + ["tune"] * n_tune + ["test"] * n_test
+    )
+    order = list(range(n_events))
+    random.Random(seed).shuffle(order)
+    sets = [""] * n_events
+    for event, label in zip(order, labels):
+        sets[event] = label
+    return sets
+
+
+def write_manifest(
+    events: list[tuple[str, int, str]],
+    output: str,
+) -> None:
+    """Write <output>/manifest.txt: one key=value line per event (see the module docstring)."""
+    path = os.path.join(output, "manifest.txt")
+    with open(path, "w") as f:
+        for input_path, entry, output_file in events:
+            event = os.path.basename(output_file)
+            split = os.path.basename(os.path.dirname(output_file))
+            source_path = os.path.abspath(input_path)
+            f.write(
+                f"event={event} set={split} source_path={source_path} source_entry={entry}\n"
+            )
+    print(f"[done] output={path} n_events={len(events)}")
 
 
 def run_jobs(
@@ -191,6 +263,8 @@ def process_event(
         ),
         "hit_index": torch.as_tensor(hit_index, dtype=torch.int64),
         "hit_sim_pairs": torch.as_tensor(pairs, dtype=torch.int64),
+        "source_path": os.path.abspath(input_path),
+        "source_entry": entry,
     }
     torch.save(data, output_file)
     print(f"[done] output={output_file} n_md={len(x)} n_hit_sim_pairs={len(pairs)}")
