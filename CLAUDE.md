@@ -29,6 +29,8 @@ Dependencies are declared in `pyproject.toml`; add new ones there rather than as
 
 - Use package imports (`from transformer_datasets.constants import ...`), not flat imports or `sys.path` hacks.
 - Format Python with black. One argument per line with a trailing comma when a call or signature doesn't fit on one line, keyword arguments where possible, and type hints on all signatures.
+- Scripts read top-down: `main` comes first, as a short outline (about 10–20 lines), followed by the functions it calls in roughly call order. Argument parsing lives in `parse_args()`, and the `args` namespace is unpacked in `main` and never passed to other functions.
+- Prefer explicit named sets in constants (e.g. `BARREL_LAYERS = range(1, 7)`) over thresholds like `layer <= 6`.
 - Bash scripts: `set -euo pipefail`, configuration through environment variables with defaults, `[info]`/`[done]`-style log lines, and write to a temporary name and rename on success so interrupted jobs don't leave outputs that look finished.
 - Focus on T3 graphs. The LS-graph variant from transformer-oc was intentionally not carried over.
 
