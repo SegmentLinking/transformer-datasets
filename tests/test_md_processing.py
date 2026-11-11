@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 import awkward as ak
 import numpy as np
 
@@ -5,11 +8,13 @@ from transformer_datasets.constants import UNMATCHED
 from transformer_datasets.md_processing import (
     K2RINV_1GEV,
     anchor_is_inner,
+    assign_sets,
     hit_sim_pairs,
     md_features,
     md_sim_features,
     md_track_estimates,
     order_hits,
+    write_manifest,
 )
 
 
@@ -96,13 +101,6 @@ def test_md_sim_features_unmatched_rows():
     assert np.array_equal(result, [[3.0, 30.0], [UNMATCHED, UNMATCHED], [1.0, 10.0]])
 
 
-if __name__ == "__main__":
-    for name, func in list(globals().items()):
-        if name.startswith("test_"):
-            func()
-            print(f"{name}: passed")
-
-
 def test_md_track_estimates():
     # anchor at rt = 50 cm; a positive 2 GeV track has q/pT = 0.5, i.e. dphichange = -asin(K * 50 * 0.5) in LST's
     # convention; a straight MD (dphichange = 0) gives q/pT = 0
@@ -114,3 +112,57 @@ def test_md_track_estimates():
         anchor=anchor,
     )
     assert np.allclose(estimates, [[0.2, 0.5], [-1.5, 0.0]])
+
+
+def test_write_manifest():
+    with tempfile.TemporaryDirectory() as output:
+        events = [
+            ("a.root", 0, os.path.join(output, "train", "event_0.pt")),
+            ("a.root", 1, os.path.join(output, "val", "event_1.pt")),
+        ]
+        write_manifest(events=events, output=output)
+        with open(os.path.join(output, "manifest.txt")) as f:
+            lines = f.read().splitlines()
+    source_path = os.path.abspath("a.root")
+    assert lines == [
+        f"event=event_0.pt set=train source_path={source_path} source_entry=0",
+        f"event=event_1.pt set=val source_path={source_path} source_entry=1",
+    ]
+
+
+def test_assign_sets_exact_sizes():
+    sets = assign_sets(
+        n_events=4400,
+        train=0.6,
+        val=0.15,
+        tune=0.05,
+        test=0.2,
+        seed=42,
+    )
+    assert sets.count("train") == 2640
+    assert sets.count("val") == 660
+    assert sets.count("tune") == 220
+    assert sets.count("test") == 880
+
+
+def test_assign_sets_same_seed_same_sets():
+    first = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=1)
+    same = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=1)
+    other = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=2)
+    assert first == same
+    assert first != other
+
+
+def test_assign_sets_rejects_fractions_not_summing_to_one():
+    try:
+        assign_sets(n_events=10, train=0.8, val=0.15, tune=0.05, test=0.2, seed=1)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+if __name__ == "__main__":
+    for name, func in list(globals().items()):
+        if name.startswith("test_"):
+            func()
+            print(f"{name}: passed")
