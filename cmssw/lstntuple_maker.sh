@@ -14,7 +14,7 @@ set -eo pipefail
 
 LST=lst_cpu
 START_DIR=${PWD}
-CMSSW_SRC=/ceph/users/atuna/CMSSW_20_1_0_pre2/src
+CMSSW_SRC=/ceph/users/atuna/CMSSW_20_1_0_pre5/src
 
 if ! command -v "${LST}" > /dev/null; then
     echo "[env ] ${LST} not found, setting up from ${CMSSW_SRC}"
@@ -37,7 +37,7 @@ set -euo pipefail
 
 TRACKINGNTUPLE=$(realpath "${1}")
 
-LST_FLAGS=(--md --ls --t3 --t3dnn --t4 --t5 -v 1)
+LST_FLAGS=(--md --ls --t3 --t3dnn --t4 --t5 -v 1) # --allsim
 
 BASENAME=$(basename "${TRACKINGNTUPLE}" .root)
 NAME=LSTNtuple_${BASENAME#trackingntuple_}
