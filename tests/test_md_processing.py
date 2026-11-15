@@ -117,16 +117,16 @@ def test_md_track_estimates():
 def test_write_manifest():
     with tempfile.TemporaryDirectory() as output:
         events = [
-            ("a.root", 0, os.path.join(output, "train", "event_0.pt")),
-            ("a.root", 1, os.path.join(output, "val", "event_1.pt")),
+            ("/data/allsim/a.root", 0, os.path.join(output, "train", "event_0.pt")),
+            ("/data/allsim/a.root", 1, os.path.join(output, "val", "event_1.pt")),
         ]
         write_manifest(events=events, output=output)
         with open(os.path.join(output, "manifest.txt")) as f:
             lines = f.read().splitlines()
-    source_path = os.path.abspath("a.root")
+    # The file name only: the directory is left out
     assert lines == [
-        f"event=event_0.pt set=train source_path={source_path} source_entry=0",
-        f"event=event_1.pt set=val source_path={source_path} source_entry=1",
+        "event_file=event_0.pt event_set=train lstntuple_file=a.root lstntuple_entry=0",
+        "event_file=event_1.pt event_set=val lstntuple_file=a.root lstntuple_entry=1",
     ]
 
 

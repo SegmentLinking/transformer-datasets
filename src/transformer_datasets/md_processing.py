@@ -10,11 +10,14 @@ torch.load(path, weights_only=True):
     hit_index:    int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
     hit_sim_pairs: int64  (n_pairs, 2): unique [hit index, sim index] pairs, one per sim of each hit of the kept
                   MDs, with no match-fraction cut. Hits with no sim have no pair.
-    source_path:  str: absolute path of the LSTNtuple the event was read from
-    source_entry: int: entry of the event in that LSTNtuple
+    lstntuple_file:  str: file name (no directory) of the LSTNtuple the event was read from
+    lstntuple_entry: int: entry of the event in that LSTNtuple
 
 <output>/manifest.txt lists every planned event, one line each, as key=value:
-    event=event_0.pt set=train source_path=/abs/path/LSTNtuple_X.root source_entry=0
+    event_file=event_0.pt event_set=train lstntuple_file=LSTNtuple_X.root lstntuple_entry=0
+
+The manifest records the LSTNtuple's file name, not its directory: the same input exists as an all-sim LSTNtuple
+(read here, for training) and a nominal one (read by the evaluation harness), with the same name and event order.
 
 rt, phi and z are those of the inner hit. dX is X(outer hit) - X(inner hit).
 eta and qoverpt are LST's own MD estimates: eta is md_eta (anchor hit), and qoverpt in GeV^-1 is the MD q/pT
@@ -185,11 +188,11 @@ def write_manifest(
     path = os.path.join(output, "manifest.txt")
     with open(path, "w") as f:
         for input_path, entry, output_file in events:
-            event = os.path.basename(output_file)
-            split = os.path.basename(os.path.dirname(output_file))
-            source_path = os.path.abspath(input_path)
+            event_file = os.path.basename(output_file)
+            event_set = os.path.basename(os.path.dirname(output_file))
+            lstntuple_file = os.path.basename(input_path)
             f.write(
-                f"event={event} set={split} source_path={source_path} source_entry={entry}\n"
+                f"event_file={event_file} event_set={event_set} lstntuple_file={lstntuple_file} lstntuple_entry={entry}\n"
             )
     print(f"[done] output={path} n_events={len(events)}")
 
@@ -263,8 +266,8 @@ def process_event(
         ),
         "hit_index": torch.as_tensor(hit_index, dtype=torch.int64),
         "hit_sim_pairs": torch.as_tensor(pairs, dtype=torch.int64),
-        "source_path": os.path.abspath(input_path),
-        "source_entry": entry,
+        "lstntuple_file": os.path.basename(input_path),
+        "lstntuple_entry": entry,
     }
     torch.save(data, output_file)
     print(f"[done] output={output_file} n_md={len(x)} n_hit_sim_pairs={len(pairs)}")
