@@ -14,6 +14,7 @@ import random
 
 from transformer_datasets.constants import SIM_VARS, T3_VARS, T3_HIT_SIMIDX, T3_HIT_LAYER, T3_PMATCHED, LS_INDEX, LS_VARS, MD_VARS, MD_INDEX
 from transformer_datasets.constants import TARGET, FAKE_TARGET, LAYER_INFO, MD_SIMIDX, ALL_COLUMNS, MIN_T3_PT, MAX_T3_PT, UNMATCHED
+from transformer_datasets.constants import N_T3_MDS, MD_HIT_INDEX
 
 
 class GraphBuilder:
@@ -111,22 +112,22 @@ class GraphBuilder:
 
             t3_features = t3_df[pt_mask].values
 
-            ls_idx = ak.to_dataframe(event_data[LS_INDEX])[pt_mask].values
-            md_idx = ak.to_dataframe(event_data[MD_INDEX]).values[ls_idx]
+            ls_idx_all = ak.to_dataframe(event_data[LS_INDEX]).values
+            md_idx_all = unique_t3_md_indices(ak.to_dataframe(event_data[MD_INDEX]).values[ls_idx_all])
+            ls_idx = ls_idx_all[pt_mask]
+            md_idx_flat = md_idx_all[pt_mask]
 
             ls_features = ak.to_dataframe(event_data[LS_VARS]).values[ls_idx]
             ls_features = ls_features.reshape(-1, 2 * len(LS_VARS))
 
-            md_idx_flat = md_idx.reshape(-1, 4)
             md_features = ak.to_dataframe(event_data[MD_VARS]).values[md_idx_flat]
-
-            md_features = md_features.reshape(-1, 4 * len(MD_VARS))
+            md_features = md_features.reshape(-1, N_T3_MDS * len(MD_VARS))
 
             md_layer = ak.to_dataframe(event_data[LAYER_INFO]).values[md_idx_flat]
-            md_layer = md_layer.reshape(-1, 4)
+            md_layer = md_layer.reshape(-1, N_T3_MDS)
 
             md_simIdx = ak.to_dataframe(event_data[MD_SIMIDX]).values[md_idx_flat]
-            md_simIdx = md_simIdx.reshape(-1, 4)
+            md_simIdx = md_simIdx.reshape(-1, N_T3_MDS)
 
             hit_simIdx = convert_hit_simIdx_to_array(event_data[T3_HIT_SIMIDX])
             pMatched_by_hand = calculate_pMatched(hit_simIdx)
@@ -135,7 +136,16 @@ class GraphBuilder:
             if n_mismatch > 0:
                 raise ValueError(f"Mismatch between calculated pMatched and ntuple pMatched for graph {idx}")
             hit_simIdx = hit_simIdx[pt_mask]
-            hit_layer = ak.to_dataframe(event_data[T3_HIT_LAYER])[pt_mask].values
+            hit_layer_all = ak.to_dataframe(event_data[T3_HIT_LAYER]).values
+            hit_layer = hit_layer_all[pt_mask]
+
+            # Built from all T3s, so the table covers every hit in the event; hit_id is cut like the other per-T3 fields
+            hit_id, hit_sim_candidates = build_hit_table(
+                hit_idx=t3_hit_indices(md_idx_all, ak.to_dataframe(event_data[MD_HIT_INDEX]).values),
+                sim_lists=event_data[T3_HIT_SIMIDX],
+                layer=hit_layer_all,
+            )
+            hit_id = hit_id[pt_mask]
 
             target_np = ak.to_dataframe(event_data[TARGET])[pt_mask].values
 
@@ -147,6 +157,7 @@ class GraphBuilder:
                 md_simIdx = self._to_tensor(md_simIdx[fake_mask])
                 hit_simIdx = self._to_tensor(hit_simIdx[fake_mask])
                 hit_layer = self._to_tensor(hit_layer[fake_mask])
+                hit_id = self._to_tensor(hit_id[fake_mask], dtype=torch.long)
 
             else:
                 node_features_np = np.concatenate([t3_features, ls_features, md_features], axis=1)
@@ -156,6 +167,7 @@ class GraphBuilder:
                 md_simIdx = self._to_tensor(md_simIdx)
                 hit_simIdx = self._to_tensor(hit_simIdx)
                 hit_layer = self._to_tensor(hit_layer)
+                hit_id = self._to_tensor(hit_id, dtype=torch.long)
 
             node_features = self._to_tensor(node_features_np)
             sim_features = self._to_tensor(ak.to_dataframe(event_data[SIM_VARS]).values)
@@ -163,7 +175,8 @@ class GraphBuilder:
             graph = Data(x=node_features,
                          sim_index=target_flat, sim_features=sim_features,
                          md_layer=md_layer, md_simIdx=md_simIdx,
-                         hit_layer=hit_layer, hit_simIdx=hit_simIdx)
+                         hit_layer=hit_layer, hit_simIdx=hit_simIdx, hit_id=hit_id,
+                         hit_sim_candidates=self._to_tensor(hit_sim_candidates, dtype=torch.long))
             if args.debug:
                 print(graph)
                 return

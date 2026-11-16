@@ -10,6 +10,8 @@ LS_VARS = ["ls_dPhis", "ls_dPhiChanges", "ls_dAlphaInners", "ls_dAlphaOuters", "
 
 MD_VARS = ["md_anchor_x", "md_anchor_y", "md_anchor_z", "md_other_x", "md_other_y", "md_other_z", "md_dphi", "md_dphichange", "md_dz"]
 MD_INDEX = ["ls_mdIdx0", "ls_mdIdx1"]
+MD_HIT_INDEX = ["md_anchor_hitIdx", "md_other_hitIdx"]  # T3 hit slot 2k is the anchor of MD k, 2k + 1 the other
+N_T3_MDS = 3  # distinct MDs per T3 (its two LSs share the middle one)
 
 TARGET = ["t3_simIdx"]
 
@@ -18,7 +20,7 @@ FAKE_TARGET = ["t3_isFake"]
 LAYER_INFO = ["md_layer"]
 MD_SIMIDX = ["md_simIdx"]
 
-ALL_COLUMNS = SIM_VARS + T3_VARS + T3_HIT_SIMIDX + T3_HIT_LAYER + T3_PMATCHED + LS_INDEX + LS_VARS + MD_VARS + MD_INDEX + TARGET + FAKE_TARGET + LAYER_INFO + MD_SIMIDX
+ALL_COLUMNS = SIM_VARS + T3_VARS + T3_HIT_SIMIDX + T3_HIT_LAYER + T3_PMATCHED + LS_INDEX + LS_VARS + MD_VARS + MD_INDEX + MD_HIT_INDEX + TARGET + FAKE_TARGET + LAYER_INFO + MD_SIMIDX
 
 UNMATCHED = -999
 
