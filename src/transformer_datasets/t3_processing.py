@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-import random
+import hashlib
 
 from transformer_datasets.constants import SIM_VARS, T3_VARS, T3_HIT_SIMIDX, T3_HIT_LAYER, T3_PMATCHED, LS_INDEX, LS_VARS, MD_VARS, MD_INDEX
 from transformer_datasets.constants import TARGET, FAKE_TARGET, LAYER_INFO, MD_SIMIDX, ALL_COLUMNS, MIN_T3_PT, MAX_T3_PT, UNMATCHED
@@ -91,7 +91,7 @@ class GraphBuilder:
     def process_event(self, event_data, idx, args):
         """Processes a single event and saves the graph."""
         try:
-            if random.random() < self.train_split:
+            if split_value(idx, args.seed) < self.train_split:
                 output_file = os.path.join(self.train_path, f"graph_{idx}.pt")
             else:
                 output_file = os.path.join(self.val_path, f"graph_{idx}.pt")
@@ -245,6 +245,85 @@ class GraphBuilder:
             print(f"Skipped {skipped_existing} existing graph indices before read/submit.")
 
 
+def split_value(idx: int, seed: int) -> float:
+    """
+    Deterministic number in [0, 1) for the train/val split of graph idx.
+
+    It depends only on (seed, idx), so an event goes to the same split for any number of
+    workers and any processing order. Events with split_value < train_split go to train.
+    """
+    digest = hashlib.blake2b(f"{seed}:{idx}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "little") / 2**64
+
+
+def unique_t3_md_indices(md_idx: np.ndarray) -> np.ndarray:
+    """
+    Reduce the MD indices of each T3's two LSs to its three distinct MDs, inner to outer.
+
+    Input: integer array of shape (n_t3, 2, 2), indexed [t3, ls, md in ls].
+    Output: integer array of shape (n_t3, N_T3_MDS) = (LS0.md0, LS0.md1, LS1.md1).
+
+    The two LSs of a T3 share their middle MD (LS0.md1 is LS1.md0), so that slot is dropped.
+    """
+    if not np.array_equal(md_idx[:, 0, 1], md_idx[:, 1, 0]):
+        raise ValueError("Found a T3 whose two LSs do not share their middle MD")
+    return np.stack([md_idx[:, 0, 0], md_idx[:, 0, 1], md_idx[:, 1, 1]], axis=1)
+
+
+def t3_hit_indices(md_idx: np.ndarray, md_hit_idx: np.ndarray) -> np.ndarray:
+    """
+    Ntuple hit indices of the six hits of each T3, in the order of the t3_hit_{0..5}_* branches.
+
+    Inputs: md_idx (n_t3, N_T3_MDS) from unique_t3_md_indices, and md_hit_idx (n_md, 2) with columns
+    MD_HIT_INDEX (anchor, other).
+    Output: integer array of shape (n_t3, 2 * N_T3_MDS) = (MD0 anchor, MD0 other, MD1 anchor, ...).
+
+    Pixel MDs have anchor == other, so a T3 can list the same hit index twice.
+    """
+    return md_hit_idx[md_idx].reshape(md_idx.shape[0], 2 * N_T3_MDS)
+
+
+def build_hit_table(hit_idx: np.ndarray, sim_lists: ak.Array, layer: np.ndarray):
+    """
+    Give every distinct hit of the event an id, and list the sim tracks of each distinct hit.
+
+    Inputs, for one event: hit_idx (n_t3, 6) ntuple hit indices from t3_hit_indices, sim_lists with fields
+    T3_HIT_SIMIDX of shape (n_t3, var), and layer (n_t3, 6).
+    Outputs: hit_id (n_t3, 6) int64 in [0, n_hits), and hit_sim_candidates (n_hits, K) int64.
+
+    hit_id is hit_idx renumbered to 0..n_hits-1 over the hits used by the T3s.
+    The candidates of a hit are its distinct non-negative sim indices, largest first, padded with UNMATCHED.
+    This is what LST's matchedSimTrkIdxsAndFracsFromCounts counts: a hit counts towards every sim track in its row.
+
+    Raises ValueError if two slots with the same hit index disagree on their sim tracks or layer, which would
+    mean the T3 -> LS -> MD -> hit indices do not line up with the t3_hit_* branches.
+    """
+    n_t3 = hit_idx.shape[0]
+    _, first_slot, hit_id = np.unique(hit_idx.ravel(), return_index=True, return_inverse=True)
+    hit_id = hit_id.reshape(n_t3, 6)
+
+    # sim lists of every slot, row-major (t3, slot), as one padded array: distinct, non-negative, largest first
+    columns = [sim_lists[branch][0] for branch in T3_HIT_SIMIDX]  # [0] removes the event dimension
+    slots = ak.flatten(ak.concatenate([col[:, None] for col in columns], axis=1), axis=1)
+    slots = slots[slots >= 0]
+    max_len = int(ak.max(ak.num(slots), initial=1))
+    padded = ak.to_numpy(ak.fill_none(ak.pad_none(slots, max_len, clip=True), UNMATCHED)).astype(np.int64)
+    padded = -np.sort(-padded, axis=1)
+    repeated = np.zeros_like(padded, dtype=bool)
+    repeated[:, 1:] = padded[:, 1:] == padded[:, :-1]
+    padded[repeated] = UNMATCHED
+    padded = -np.sort(-padded, axis=1)
+    width = max(1, int((padded != UNMATCHED).sum(axis=1).max()))
+    padded = padded[:, :width]
+
+    hit_sim_candidates = padded[first_slot]
+    if not np.array_equal(hit_sim_candidates[hit_id.ravel()], padded):
+        raise ValueError("Slots with the same hit index have different sim tracks")
+    if not np.array_equal(layer.ravel()[first_slot][hit_id.ravel()], layer.ravel()):
+        raise ValueError("Slots with the same hit index have different layers")
+    return hit_id, hit_sim_candidates
+
+
 def convert_hit_simIdx_to_array(t3_hit_simIdx: ak.Array) -> np.ndarray:
     """
     Collapse the per-hit lists of sim indices into one sim index per hit.
@@ -331,11 +410,9 @@ if __name__ == "__main__":
     argparser.add_argument("--split", type=float, default=0.8, help="Train/val split ratio")
     argparser.add_argument("--nofakes", action="store_true", help="Exclude fake hits from the graphs")
     argparser.add_argument("--chunk_size", type=int, default=256, help="Number of events to read per ROOT I/O chunk")
-    argparser.add_argument("--seed", type=int, default=None, help="Optional random seed for train/val split")
+    argparser.add_argument("--seed", type=int, default=0,
+                           help="Seed of the train/val split (deterministic per graph index; see split_value)")
     args = argparser.parse_args()
-
-    if args.seed is not None:
-        random.seed(args.seed)
 
     if not os.path.exists(args.output):
         os.makedirs(args.output)
