@@ -17,11 +17,10 @@ torch.load(path, weights_only=True):
 Each LSTNtuple file goes whole into one dataset (train, val or test), so events of one file never straddle datasets.
 An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, e.g. train/LSTNtuple_X.entry_7.pt.
 
-<output>/manifest.txt lists every input file, one line each, as key=value:
-    dataset=train lstntuple_file=LSTNtuple_X.root n_entries=100
-n_entries is the number of entries processed, 0 to n_entries - 1.
+<output>/train.txt, val.txt and test.txt list each dataset's LSTNtuple files, one file name per line, e.g.
+    LSTNtuple_X.root
 
-The manifest records the LSTNtuple's file name, not its directory: the same input exists as an all-sim LSTNtuple
+The lists record the LSTNtuple's file name, not its directory: the same input exists as an all-sim LSTNtuple
 (read here, for training) and a nominal one (read by the evaluation harness), with the same name and event order.
 
 rt, phi and z are those of the inner hit. dX is X(outer hit) - X(inner hit).
@@ -97,7 +96,7 @@ def main() -> None:
         seed=args.seed,
     )
     jobs = plan_jobs(files=files, output=args.output)
-    write_manifest(files=files, output=args.output)
+    write_file_lists(files=files, output=args.output)
     run_jobs(jobs=jobs, n_workers=args.n_workers)
 
 
@@ -202,7 +201,7 @@ def plan_jobs(
     One job per event, written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt.
 
     Creates <output>/{train,val,test}, and raises FileExistsError if one exists: a production always starts from
-    scratch (no resuming), so the manifest and the files always come from the same run.
+    scratch (no resuming), so the file lists and the files always come from the same run.
     """
     for dataset in DATASETS:
         os.makedirs(os.path.join(output, dataset))
@@ -222,19 +221,22 @@ def plan_jobs(
     return jobs
 
 
-def write_manifest(
+def write_file_lists(
     files: list[InputFile],
     output: str,
 ) -> None:
-    """Write <output>/manifest.txt: one key=value line per input file (see the module docstring)."""
-    path = os.path.join(output, "manifest.txt")
-    with open(path, "w") as manifest_file:
-        for file in files:
-            lstntuple_file = os.path.basename(file.lstntuple_path)
-            manifest_file.write(
-                f"dataset={file.dataset} lstntuple_file={lstntuple_file} n_entries={file.n_entries}\n"
-            )
-    print(f"[done] output={path} n_files={len(files)}")
+    """Write <output>/<dataset>.txt for each dataset: its LSTNtuple file names, one per line."""
+    for dataset in DATASETS:
+        path = os.path.join(output, f"{dataset}.txt")
+        fnames = [
+            os.path.basename(file.lstntuple_path)
+            for file in files
+            if file.dataset == dataset
+        ]
+        with open(path, "w") as list_file:
+            for fname in fnames:
+                list_file.write(f"{fname}\n")
+        print(f"[done] output={path} n_files={len(fnames)}")
 
 
 def run_jobs(

@@ -16,7 +16,7 @@ from transformer_datasets.md_processing import (
     md_track_estimates,
     order_hits,
     plan_jobs,
-    write_manifest,
+    write_file_lists,
 )
 
 
@@ -130,16 +130,15 @@ FILES = [
 ]
 
 
-def test_write_manifest(tmp_path):
+def test_write_file_lists(tmp_path):
     output = str(tmp_path)
-    write_manifest(files=FILES, output=output)
-    with open(os.path.join(output, "manifest.txt")) as f:
-        lines = f.read().splitlines()
-    # The file name only: the directory is left out
-    assert lines == [
-        "dataset=train lstntuple_file=a.root n_entries=2",
-        "dataset=val lstntuple_file=b.root n_entries=1",
-    ]
+    write_file_lists(files=FILES, output=output)
+    lines = {}
+    for dataset in ["train", "val", "test"]:
+        with open(os.path.join(output, f"{dataset}.txt")) as f:
+            lines[dataset] = f.read().splitlines()
+    # The file name only: the directory is left out. A dataset with no files gets an empty list
+    assert lines == {"train": ["a.root"], "val": ["b.root"], "test": []}
 
 
 def test_plan_jobs(tmp_path):
