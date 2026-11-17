@@ -139,13 +139,11 @@ class GraphBuilder:
             hit_layer_all = ak.to_dataframe(event_data[T3_HIT_LAYER]).values
             hit_layer = hit_layer_all[pt_mask]
 
-            # Built from all T3s, so the table covers every hit in the event; hit_id is cut like the other per-T3 fields
-            hit_id, hit_sim_candidates = build_hit_table(
-                hit_idx=t3_hit_indices(md_idx_all, ak.to_dataframe(event_data[MD_HIT_INDEX]).values),
-                sim_lists=event_data[T3_HIT_SIMIDX],
-                layer=hit_layer_all,
-            )
-            hit_id = hit_id[pt_mask]
+            hit_idx_all = t3_hit_indices(md_idx_all, ak.to_dataframe(event_data[MD_HIT_INDEX]).values)
+            hit_simIdxs_all = hit_sim_indices(event_data[T3_HIT_SIMIDX])
+            check_hits_consistent(hit_idx=hit_idx_all, hit_simIdxs=hit_simIdxs_all, layer=hit_layer_all)
+            hit_idx = hit_idx_all[pt_mask]
+            hit_simIdxs = [slot[pt_mask] for slot in hit_simIdxs_all]
 
             target_np = ak.to_dataframe(event_data[TARGET])[pt_mask].values
 
@@ -157,7 +155,8 @@ class GraphBuilder:
                 md_simIdx = self._to_tensor(md_simIdx[fake_mask])
                 hit_simIdx = self._to_tensor(hit_simIdx[fake_mask])
                 hit_layer = self._to_tensor(hit_layer[fake_mask])
-                hit_id = self._to_tensor(hit_id[fake_mask], dtype=torch.long)
+                hit_idx = self._to_tensor(hit_idx[fake_mask], dtype=torch.long)
+                hit_simIdxs = [self._to_tensor(slot[fake_mask], dtype=torch.long) for slot in hit_simIdxs]
 
             else:
                 node_features_np = np.concatenate([t3_features, ls_features, md_features], axis=1)
@@ -167,7 +166,8 @@ class GraphBuilder:
                 md_simIdx = self._to_tensor(md_simIdx)
                 hit_simIdx = self._to_tensor(hit_simIdx)
                 hit_layer = self._to_tensor(hit_layer)
-                hit_id = self._to_tensor(hit_id, dtype=torch.long)
+                hit_idx = self._to_tensor(hit_idx, dtype=torch.long)
+                hit_simIdxs = [self._to_tensor(slot, dtype=torch.long) for slot in hit_simIdxs]
 
             node_features = self._to_tensor(node_features_np)
             sim_features = self._to_tensor(ak.to_dataframe(event_data[SIM_VARS]).values)
@@ -175,8 +175,8 @@ class GraphBuilder:
             graph = Data(x=node_features,
                          sim_index=target_flat, sim_features=sim_features,
                          md_layer=md_layer, md_simIdx=md_simIdx,
-                         hit_layer=hit_layer, hit_simIdx=hit_simIdx, hit_id=hit_id,
-                         hit_sim_candidates=self._to_tensor(hit_sim_candidates, dtype=torch.long))
+                         hit_layer=hit_layer, hit_simIdx=hit_simIdx, hit_idx=hit_idx,
+                         **{f"hit_{k}_simIdxs": slot for k, slot in enumerate(hit_simIdxs)})
             if args.debug:
                 print(graph)
                 return
@@ -283,45 +283,62 @@ def t3_hit_indices(md_idx: np.ndarray, md_hit_idx: np.ndarray) -> np.ndarray:
     return md_hit_idx[md_idx].reshape(md_idx.shape[0], 2 * N_T3_MDS)
 
 
-def build_hit_table(hit_idx: np.ndarray, sim_lists: ak.Array, layer: np.ndarray):
+def hit_sim_indices(sim_lists: ak.Array) -> list[np.ndarray]:
     """
-    Give every distinct hit of the event an id, and list the sim tracks of each distinct hit.
+    List the sim tracks of every hit of every T3, one padded array per hit slot.
 
-    Inputs, for one event: hit_idx (n_t3, 6) ntuple hit indices from t3_hit_indices, sim_lists with fields
-    T3_HIT_SIMIDX of shape (n_t3, var), and layer (n_t3, 6).
-    Outputs: hit_id (n_t3, 6) int64 in [0, n_hits), and hit_sim_candidates (n_hits, K) int64.
+    Input: one event, with fields T3_HIT_SIMIDX, each of shape (n_t3, var).
+    Output: a list of 2 * N_T3_MDS int64 arrays, one per hit slot (hit_0_simIdxs, ...), each of
+    shape (n_t3, K) with K the largest number of sim tracks of a hit in that slot (at least 1).
 
-    hit_id is hit_idx renumbered to 0..n_hits-1 over the hits used by the T3s.
     The candidates of a hit are its distinct non-negative sim indices, largest first, padded with UNMATCHED.
     This is what LST's matchedSimTrkIdxsAndFracsFromCounts counts: a hit counts towards every sim track in its row.
-
-    Raises ValueError if two slots with the same hit index disagree on their sim tracks or layer, which would
-    mean the T3 -> LS -> MD -> hit indices do not line up with the t3_hit_* branches.
+    The ntuple branches have one entry per sim hit, so they contain repeats and negatives.
     """
-    n_t3 = hit_idx.shape[0]
-    _, first_slot, hit_id = np.unique(hit_idx.ravel(), return_index=True, return_inverse=True)
-    hit_id = hit_id.reshape(n_t3, 6)
-
-    # sim lists of every slot, row-major (t3, slot), as one padded array: distinct, non-negative, largest first
     columns = [sim_lists[branch][0] for branch in T3_HIT_SIMIDX]  # [0] removes the event dimension
-    slots = ak.flatten(ak.concatenate([col[:, None] for col in columns], axis=1), axis=1)
-    slots = slots[slots >= 0]
-    max_len = int(ak.max(ak.num(slots), initial=1))
-    padded = ak.to_numpy(ak.fill_none(ak.pad_none(slots, max_len, clip=True), UNMATCHED)).astype(np.int64)
+    return [distinct_descending(col[col >= 0]) for col in columns]
+
+
+def distinct_descending(lists: ak.Array) -> np.ndarray:
+    """
+    Pad jagged lists of integers into one array: distinct values of each row, largest first, padded with UNMATCHED.
+
+    Input: shape (n, var). Output: int64 array of shape (n, K), K the largest number of distinct values in a row
+    (at least 1). Example: [[3, 7, 3], [], [5]] -> [[7, 3], [UNMATCHED, UNMATCHED], [5, UNMATCHED]].
+    """
+    max_len = int(ak.max(ak.num(lists), initial=1))
+    padded = ak.to_numpy(ak.fill_none(ak.pad_none(lists, max(1, max_len), clip=True), UNMATCHED)).astype(np.int64)
     padded = -np.sort(-padded, axis=1)
     repeated = np.zeros_like(padded, dtype=bool)
     repeated[:, 1:] = padded[:, 1:] == padded[:, :-1]
     padded[repeated] = UNMATCHED
     padded = -np.sort(-padded, axis=1)
-    width = max(1, int((padded != UNMATCHED).sum(axis=1).max()))
-    padded = padded[:, :width]
+    width = max(1, int((padded != UNMATCHED).sum(axis=1).max(initial=0)))
+    return padded[:, :width]
 
-    hit_sim_candidates = padded[first_slot]
-    if not np.array_equal(hit_sim_candidates[hit_id.ravel()], padded):
+
+def check_hits_consistent(
+    hit_idx: np.ndarray,
+    hit_simIdxs: list[np.ndarray],
+    layer: np.ndarray,
+) -> None:
+    """
+    Check that every slot with the same ntuple hit index has the same sim tracks and layer.
+
+    Inputs, for one event: hit_idx (n_t3, 6) from t3_hit_indices, hit_simIdxs from hit_sim_indices,
+    and layer (n_t3, 6) from the t3_hit_*_layer branches.
+
+    Raises ValueError otherwise, which would mean the T3 -> LS -> MD -> hit indices do not line up with
+    the t3_hit_* branches.
+    """
+    width = max(slot.shape[1] for slot in hit_simIdxs)
+    padded = [np.pad(slot, ((0, 0), (0, width - slot.shape[1])), constant_values=UNMATCHED) for slot in hit_simIdxs]
+    sims = np.stack(padded, axis=1).reshape(-1, width)  # (n_t3 * 6, width), row-major (t3, slot)
+    _, first_slot, hit = np.unique(hit_idx.ravel(), return_index=True, return_inverse=True)
+    if not np.array_equal(sims[first_slot][hit], sims):
         raise ValueError("Slots with the same hit index have different sim tracks")
-    if not np.array_equal(layer.ravel()[first_slot][hit_id.ravel()], layer.ravel()):
+    if not np.array_equal(layer.ravel()[first_slot][hit], layer.ravel()):
         raise ValueError("Slots with the same hit index have different layers")
-    return hit_id, hit_sim_candidates
 
 
 def convert_hit_simIdx_to_array(t3_hit_simIdx: ak.Array) -> np.ndarray:
