@@ -13,7 +13,7 @@ from transformer_datasets.md_processing import (
     hit_simIdxs,
     md_features,
     md_sim_features,
-    md_track_estimates,
+    md_extra_features,
     order_hits,
     plan_jobs,
     write_file_lists,
@@ -111,12 +111,12 @@ def test_md_sim_features_unmatched_rows():
     assert np.array_equal(result, [[3.0, 30.0], [UNMATCHED, UNMATCHED], [1.0, 10.0]])
 
 
-def test_md_track_estimates():
+def test_md_extra_features():
     # anchor at rt = 50 cm; a positive 2 GeV track has q/pT = 0.5, i.e. dphichange = -asin(K * 50 * 0.5) in LST's
     # convention; a straight MD (dphichange = 0) gives q/pT = 0
     anchor = np.array([[30.0, 40.0, 10.0], [30.0, 40.0, 10.0]])
     dphichange = np.array([-np.arcsin(K2RINV_1GEV * 50.0 * 0.5), 0.0])
-    estimates = md_track_estimates(
+    estimates = md_extra_features(
         eta=np.array([0.2, -1.5]),
         dphichange=dphichange,
         anchor=anchor,
