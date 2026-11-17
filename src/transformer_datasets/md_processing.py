@@ -23,14 +23,10 @@ An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, e.g. tr
 The lists record the LSTNtuple's file name, not its directory: the same input exists as an all-sim LSTNtuple
 (read here, for training) and a nominal one (read by the evaluation harness), with the same name and event order.
 
-rt, phi and z are those of the inner hit. dX is X(outer hit) - X(inner hit).
-eta and qoverpt are LST's own MD estimates: eta is md_eta (anchor hit), and qoverpt in GeV^-1 is the MD q/pT
-estimate from md_dphichange, as in md_pt = rt * K2RINV_1GEV / sin(dphichange) but inverted, so it is finite at
-dphichange = 0, and with the sign flipped to match sim q.
 The inner hit is the one with smaller rt in the barrel and smaller |z| in the endcap.
 Pixel LS MDs (md_isPLS) are discarded.
-md_simIdx (and so sim_index) is set only when both hits come from one sim. Use hit_index and
-hit_{inner,outer}_simIdxs for hit-level matching. Needs an LSTNtuple with the md_{anchor,other}_{hitIdx,simIdxs} branches.
+Use hit_index and hit_{inner,outer}_simIdxs for hit-level matching.
+Needs an LSTNtuple with the md_{anchor,other}_{hitIdx,simIdxs} branches.
 """
 
 import os
@@ -276,12 +272,12 @@ def process_event(
 
     inner, outer = order_hits(anchor=anchor, other=other, layer=layer)
     x = md_features(inner=inner, outer=outer, layer=layer)
-    estimates = md_track_estimates(
+    extra_features = md_extra_features(
         eta=md["md_eta"][keep],
         dphichange=md["md_dphichange"][keep],
         anchor=anchor,
     )
-    x = np.concatenate([x, estimates], axis=1)
+    x = np.concatenate([x, extra_features], axis=1)
 
     anchor_inner = anchor_is_inner(anchor=anchor, other=other, layer=layer)
     hit_index = np.where(
@@ -393,13 +389,13 @@ def md_features(
     )
 
 
-def md_track_estimates(
+def md_extra_features(
     eta: np.ndarray,
     dphichange: np.ndarray,
     anchor: np.ndarray,
 ) -> np.ndarray:
     """
-    LST's per-MD track estimates [eta, qoverpt], shape (n_md, 2).
+    Extra MD features: [eta, qoverpt], shape (n_md, 2).
 
     Input: md_eta and md_dphichange of shape (n_md,), and anchor of shape (n_md, 3) with columns x, y, z.
     qoverpt = -sin(dphichange) / (K2RINV_1GEV * anchor rt), in GeV^-1. The minus sign matches sim q: LST's
