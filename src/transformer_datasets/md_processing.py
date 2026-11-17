@@ -8,13 +8,18 @@ torch.load(path, weights_only=True):
     sim_index:    int64   (n_md,):   md_simIdx, UNMATCHED for fake MDs
     sim_features: float32 (n_md, 10): MD_SIM_VARS of the matched sim track, UNMATCHED for fake MDs
     hit_index:    int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
-    hit_sim_pairs: int64  (n_pairs, 2): unique [hit index, sim index] pairs, one per sim of each hit of the kept
-                  MDs, with no match-fraction cut. Hits with no sim have no pair.
+    hit_inner_simIdxs: int32 (n_md, n_max_simIdxs): sims of the inner hit (md_anchor_simIdxs or md_other_simIdxs),
+                  padded with UNMATCHED. n_max_simIdxs is the most sims of any hit in the event.
+    hit_outer_simIdxs: int32 (n_md, n_max_simIdxs): the same for the outer hit
     lstntuple_file:  str: file name (no directory) of the LSTNtuple the event was read from
     lstntuple_entry: int: entry of the event in that LSTNtuple
 
-<output>/manifest.txt lists every planned event, one line each, as key=value:
-    event_file=event_0.pt event_set=train lstntuple_file=LSTNtuple_X.root lstntuple_entry=0
+Each LSTNtuple file goes whole into one dataset (train, val or test), so events of one file never straddle datasets.
+An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, e.g. train/LSTNtuple_X.entry_7.pt.
+
+<output>/manifest.txt lists every input file, one line each, as key=value:
+    dataset=train lstntuple_file=LSTNtuple_X.root n_entries=100
+n_entries is the number of entries processed, 0 to n_entries - 1.
 
 The manifest records the LSTNtuple's file name, not its directory: the same input exists as an all-sim LSTNtuple
 (read here, for training) and a nominal one (read by the evaluation harness), with the same name and event order.
@@ -25,14 +30,15 @@ estimate from md_dphichange, as in md_pt = rt * K2RINV_1GEV / sin(dphichange) bu
 dphichange = 0, and with the sign flipped to match sim q.
 The inner hit is the one with smaller rt in the barrel and smaller |z| in the endcap.
 Pixel LS MDs (md_isPLS) are discarded.
-md_simIdx (and so sim_index) is set only when both hits come from one sim. Use hit_index and hit_sim_pairs for
-hit-level matching. Needs an LSTNtuple with the md_{anchor,other}_{hitIdx,simIdxs} branches.
+md_simIdx (and so sim_index) is set only when both hits come from one sim. Use hit_index and
+hit_{inner,outer}_simIdxs for hit-level matching. Needs an LSTNtuple with the md_{anchor,other}_{hitIdx,simIdxs} branches.
 """
 
 import os
 import random
 from argparse import ArgumentParser, Namespace
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 
 import awkward as ak
 import numpy as np
@@ -58,22 +64,41 @@ BARREL_LAYERS = range(1, 7)
 ENDCAP_LAYERS = range(7, 12)
 # Curvature constant (speed of light * B / 2) in GeV^-1 cm^-1, k2Rinv1GeVf in LSTCore interface/alpaka/Common.h
 K2RINV_1GEV = 2.99792458e-3 * 3.8 / 2
+DATASETS = ["train", "val", "test"]
+DOT_ROOT = ".root"
+
+
+@dataclass
+class InputFile:
+    """One input LSTNtuple: its path, the dataset all its events go to, and how many entries are processed."""
+
+    lstntuple_path: str
+    dataset: str
+    n_entries: int
+
+
+@dataclass
+class EventJob:
+    """One event to process: where to read it, and the .pt file to write."""
+
+    lstntuple_path: str
+    lstntuple_entry: int
+    output_file: str
 
 
 def main() -> None:
     args = parse_args()
-    events = plan_events(
+    files = plan_files(
         input_paths=args.input,
-        output=args.output,
         n_events=args.n_events,
         train=args.train,
         val=args.val,
-        tune=args.tune,
         test=args.test,
         seed=args.seed,
     )
-    write_manifest(events=events, output=args.output)
-    run_jobs(jobs=events, n_workers=args.n_workers)
+    jobs = plan_jobs(files=files, output=args.output)
+    write_manifest(files=files, output=args.output)
+    run_jobs(jobs=jobs, n_workers=args.n_workers)
 
 
 def parse_args() -> Namespace:
@@ -87,129 +112,144 @@ def parse_args() -> Namespace:
         default=-1,
         help="Events to process per input file (-1=all)",
     )
-    parser.add_argument("--train", type=float, default=0.6, help="Training fraction")
+    parser.add_argument(
+        "--train", type=float, default=0.7, help="Training fraction of files"
+    )
     parser.add_argument(
         "--val",
         type=float,
         default=0.15,
-        help="Validation fraction (training loss, early stopping)",
+        help="Validation fraction of files (training loss, early stopping)",
     )
     parser.add_argument(
-        "--tune", type=float, default=0.05, help="Tuning fraction (harness thresholds)"
+        "--test",
+        type=float,
+        default=0.15,
+        help="Test fraction of files (reported numbers)",
     )
-    parser.add_argument(
-        "--test", type=float, default=0.2, help="Test fraction (reported numbers)"
-    )
-    parser.add_argument("--seed", type=int, default=None, help="Seed for the sets")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for the datasets")
     return parser.parse_args()
 
 
-def plan_events(
+def plan_files(
     input_paths: list[str],
-    output: str,
     n_events: int,
     train: float,
     val: float,
-    tune: float,
     test: float,
     seed: int | None,
-) -> list[tuple[str, int, str]]:
+) -> list[InputFile]:
     """
-    One (input path, entry, output file) per event, numbered event_0, event_1, ... across all inputs.
+    Every input file with its dataset and number of entries to process, sorted by file name.
 
-    train, val, tune and test are the fractions of events in each set (see assign_sets). Creates
-    <output>/{train,val,tune,test}, and raises FileExistsError if one exists: a production always starts from
-    scratch (no resuming), so the manifest and the files always come from the same run.
+    Sorting first makes the datasets depend only on the seed and the set of files, not on the order of --input.
+    train, val and test are fractions of files (see assign_datasets). n_events caps the entries per file (-1: all).
     """
-    sources = []
-    for input_path in input_paths:
-        with uproot.open(input_path) as f:
-            n_entries = f["tree"].num_entries
-        if n_events != -1:
-            n_entries = min(n_entries, n_events)
-        sources.extend((input_path, entry) for entry in range(n_entries))
-
-    sets = assign_sets(
-        n_events=len(sources),
+    input_paths = sorted(input_paths, key=os.path.basename)
+    datasets = assign_datasets(
+        n_files=len(input_paths),
         train=train,
         val=val,
-        tune=tune,
         test=test,
         seed=seed,
     )
-    os.makedirs(os.path.join(output, "train"))
-    os.makedirs(os.path.join(output, "val"))
-    os.makedirs(os.path.join(output, "tune"))
-    os.makedirs(os.path.join(output, "test"))
-    return [
-        (input_path, entry, os.path.join(output, name, f"event_{idx}.pt"))
-        for idx, ((input_path, entry), name) in enumerate(zip(sources, sets))
-    ]
+    files = []
+    for input_path, dataset in zip(input_paths, datasets):
+        with uproot.open(input_path) as root_file:
+            n_entries = root_file["tree"].num_entries
+        if n_events != -1:
+            n_entries = min(n_entries, n_events)
+        files.append(
+            InputFile(lstntuple_path=input_path, dataset=dataset, n_entries=n_entries)
+        )
+    return files
 
 
-def assign_sets(
-    n_events: int,
+def assign_datasets(
+    n_files: int,
     train: float,
     val: float,
-    tune: float,
     test: float,
     seed: int | None,
 ) -> list[str]:
     """
-    The set ("train", "val", "tune" or "test") of each event, shape (n_events,).
+    The dataset ("train", "val" or "test") of each file, shape (n_files,).
 
-    Exact sizes: round(fraction * n_events) events for val, tune and test, and the rest for train. Events are
-    shuffled with seed before the sets are cut, so the same seed and n_events always give the same sets.
+    Exact sizes: round(fraction * n_files) files for val and test, and the rest for train. Files are shuffled with
+    seed before the datasets are cut, so the same seed and n_files always give the same datasets.
     """
-    if abs(train + val + tune + test - 1) > 1e-9:
+    if abs(train + val + test - 1) > 1e-9:
         raise ValueError(
-            f"set fractions must sum to 1, got train={train} val={val} tune={tune} test={test}"
+            f"dataset fractions must sum to 1, got train={train} val={val} test={test}"
         )
-    n_val = round(val * n_events)
-    n_tune = round(tune * n_events)
-    n_test = round(test * n_events)
-    n_train = n_events - n_val - n_tune - n_test
-    labels = (
-        ["train"] * n_train + ["val"] * n_val + ["tune"] * n_tune + ["test"] * n_test
-    )
-    order = list(range(n_events))
+    n_val = round(val * n_files)
+    n_test = round(test * n_files)
+    n_train = n_files - n_val - n_test
+    labels = ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
+    order = list(range(n_files))
     random.Random(seed).shuffle(order)
-    sets = [""] * n_events
-    for event, label in zip(order, labels):
-        sets[event] = label
-    return sets
+    datasets = [""] * n_files
+    for i_file, label in zip(order, labels):
+        datasets[i_file] = label
+    return datasets
+
+
+def plan_jobs(
+    files: list[InputFile],
+    output: str,
+) -> list[EventJob]:
+    """
+    One job per event, written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt.
+
+    Creates <output>/{train,val,test}, and raises FileExistsError if one exists: a production always starts from
+    scratch (no resuming), so the manifest and the files always come from the same run.
+    """
+    for dataset in DATASETS:
+        os.makedirs(os.path.join(output, dataset))
+    jobs = []
+    for file in files:
+        # /dir/LSTNtuple_X.root -> LSTNtuple_X
+        stem = os.path.basename(file.lstntuple_path).removesuffix(DOT_ROOT)
+        for entry in range(file.n_entries):
+            output_file = os.path.join(output, file.dataset, f"{stem}.entry_{entry}.pt")
+            jobs.append(
+                EventJob(
+                    lstntuple_path=file.lstntuple_path,
+                    lstntuple_entry=entry,
+                    output_file=output_file,
+                )
+            )
+    return jobs
 
 
 def write_manifest(
-    events: list[tuple[str, int, str]],
+    files: list[InputFile],
     output: str,
 ) -> None:
-    """Write <output>/manifest.txt: one key=value line per event (see the module docstring)."""
+    """Write <output>/manifest.txt: one key=value line per input file (see the module docstring)."""
     path = os.path.join(output, "manifest.txt")
-    with open(path, "w") as f:
-        for input_path, entry, output_file in events:
-            event_file = os.path.basename(output_file)
-            event_set = os.path.basename(os.path.dirname(output_file))
-            lstntuple_file = os.path.basename(input_path)
-            f.write(
-                f"event_file={event_file} event_set={event_set} lstntuple_file={lstntuple_file} lstntuple_entry={entry}\n"
+    with open(path, "w") as manifest_file:
+        for file in files:
+            lstntuple_file = os.path.basename(file.lstntuple_path)
+            manifest_file.write(
+                f"dataset={file.dataset} lstntuple_file={lstntuple_file} n_entries={file.n_entries}\n"
             )
-    print(f"[done] output={path} n_events={len(events)}")
+    print(f"[done] output={path} n_files={len(files)}")
 
 
 def run_jobs(
-    jobs: list[tuple[str, int, str]],
+    jobs: list[EventJob],
     n_workers: int,
 ) -> None:
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = [
             executor.submit(
                 process_event,
-                input_path=input_path,
-                entry=entry,
-                output_file=output_file,
+                input_path=job.lstntuple_path,
+                entry=job.lstntuple_entry,
+                output_file=job.output_file,
             )
-            for input_path, entry, output_file in jobs
+            for job in jobs
         ]
         for future in futures:
             future.result()
@@ -247,11 +287,10 @@ def process_event(
         np.stack([anchor_hit, other_hit], axis=1),
         np.stack([other_hit, anchor_hit], axis=1),
     )
-    pairs = hit_sim_pairs(
-        anchor_hit=anchor_hit,
-        other_hit=other_hit,
-        anchor_sims=event["md_anchor_simIdxs"][keep],
-        other_sims=event["md_other_simIdxs"][keep],
+    hit_inner_simIdxs, hit_outer_simIdxs = hit_simIdxs(
+        anchor_simIdxs=event["md_anchor_simIdxs"][keep],
+        other_simIdxs=event["md_other_simIdxs"][keep],
+        anchor_inner=anchor_inner,
     )
 
     sim = np.stack([ak.to_numpy(event[col]) for col in MD_SIM_VARS], axis=1)
@@ -265,12 +304,15 @@ def process_event(
             dtype=torch.float32,
         ),
         "hit_index": torch.as_tensor(hit_index, dtype=torch.int64),
-        "hit_sim_pairs": torch.as_tensor(pairs, dtype=torch.int64),
+        "hit_inner_simIdxs": torch.as_tensor(hit_inner_simIdxs, dtype=torch.int32),
+        "hit_outer_simIdxs": torch.as_tensor(hit_outer_simIdxs, dtype=torch.int32),
         "lstntuple_file": os.path.basename(input_path),
         "lstntuple_entry": entry,
     }
     torch.save(data, output_file)
-    print(f"[done] output={output_file} n_md={len(x)} n_hit_sim_pairs={len(pairs)}")
+    print(
+        f"[done] output={output_file} n_md={len(x)} n_max_simIdxs={hit_inner_simIdxs.shape[1]}"
+    )
 
 
 def anchor_is_inner(
@@ -385,32 +427,36 @@ def md_sim_features(
     return result
 
 
-def hit_sim_pairs(
-    anchor_hit: np.ndarray,
-    other_hit: np.ndarray,
-    anchor_sims: ak.Array,
-    other_sims: ak.Array,
-) -> np.ndarray:
+def hit_simIdxs(
+    anchor_simIdxs: ak.Array,
+    other_simIdxs: ak.Array,
+    anchor_inner: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Unique [hit index, sim index] pairs of all hits of the given MDs, shape (n_pairs, 2), sorted.
+    The sims of each MD's inner and outer hit, each shape (n_md, n_max_simIdxs), padded with UNMATCHED.
 
-    Input: anchor_hit and other_hit of shape (n_md,), and anchor_sims and other_sims with a list of sims per MD.
-    A hit shared by several MDs gives its pairs once. A hit with no sim gives no pair.
+    Input: anchor_simIdxs and other_simIdxs with a list of sims per MD (md_anchor_simIdxs, md_other_simIdxs), and
+    anchor_inner of shape (n_md,) from anchor_is_inner.
+    n_max_simIdxs is the most sims of any hit in the event, so both outputs have the same width. Each row keeps
+    LST's order of sims.
     """
-    hits = np.concatenate(
-        [
-            np.repeat(anchor_hit, ak.to_numpy(ak.num(anchor_sims))),
-            np.repeat(other_hit, ak.to_numpy(ak.num(other_sims))),
-        ]
+    # int(): ak.pad_none needs a Python int, not a numpy one
+    n_max_simIdxs = int(
+        max(
+            ak.max(ak.num(anchor_simIdxs), initial=0),
+            ak.max(ak.num(other_simIdxs), initial=0),
+        )
     )
-    sims = np.concatenate(
-        [
-            ak.to_numpy(ak.flatten(anchor_sims)),
-            ak.to_numpy(ak.flatten(other_sims)),
-        ]
+    # Pad each list to n_max_simIdxs: [[5], []] -> [[5, UNMATCHED], [UNMATCHED, UNMATCHED]]
+    anchor = ak.to_numpy(
+        ak.fill_none(ak.pad_none(anchor_simIdxs, n_max_simIdxs, clip=True), UNMATCHED)
     )
-    pairs = np.stack([hits, sims], axis=1).astype(np.int64)
-    return np.unique(pairs, axis=0)
+    other = ak.to_numpy(
+        ak.fill_none(ak.pad_none(other_simIdxs, n_max_simIdxs, clip=True), UNMATCHED)
+    )
+    inner = np.where(anchor_inner[:, None], anchor, other)
+    outer = np.where(anchor_inner[:, None], other, anchor)
+    return inner, outer
 
 
 if __name__ == "__main__":
