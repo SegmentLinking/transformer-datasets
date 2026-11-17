@@ -7,7 +7,7 @@ Dataset production for [transformer-oc](https://github.com/SegmentLinking/transf
 - `cmssw/`: bash scripts for the CMSSW stages. No pip dependencies: each script sets up CMSSW from `/cvmfs` and the release area in `CMSSW_SRC` if its tool (`cmsRun`, `lst_cpu`) isn't on the `PATH`. All are safe to rerun: existing outputs are skipped.
 - `samples/<sample>/`: file lists (`relval.txt` for step2 inputs, `trackingntuple.txt` for stage 1 outputs). Keep them as absolute paths, one per line; they record which files went into each dataset.
 - `src/transformer_datasets/`: the installable Python package. `t3_processing.py` is the graph builder, `constants.py` holds ntuple column names and cuts. `md_processing.py` is an experimental MD-level alternative: plain dicts of tensors, no PyG, with its own column lists.
-- `tests/`: pytest tests (plain asserts; the files also run as scripts without pytest).
+- `tests/`: pytest tests (plain asserts, plus pytest features such as `pytest.raises` and `tmp_path`). Run them with `pytest`.
 
 ## Environment
 
