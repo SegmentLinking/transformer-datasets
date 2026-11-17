@@ -201,7 +201,14 @@ class GraphBuilder:
             if existing_indices:
                 print(f"Found {len(existing_indices)} existing graphs. Pre-skipping before ROOT I/O.")
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Parallelism comes from the process pool, so each worker runs torch single-threaded.
+        # Otherwise every worker starts one thread per core, which on many-core nodes hits the
+        # thread limit ("libgomp: Thread creation failed") and breaks the pool.
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=torch.set_num_threads,
+            initargs=(1,),
+        ) as executor:
             pending = set()
             for tree in self.input_trees:
                 tree_entries = int(tree.num_entries)
