@@ -1,19 +1,21 @@
 import os
-import tempfile
 
 import awkward as ak
 import numpy as np
+import pytest
 
 from transformer_datasets.constants import UNMATCHED
 from transformer_datasets.md_processing import (
     K2RINV_1GEV,
+    InputFile,
     anchor_is_inner,
-    assign_sets,
-    hit_sim_pairs,
+    assign_datasets,
+    hit_simIdxs,
     md_features,
     md_sim_features,
     md_track_estimates,
     order_hits,
+    plan_jobs,
     write_manifest,
 )
 
@@ -33,24 +35,32 @@ def test_anchor_is_inner_tie_keeps_anchor_inner():
 
 def test_anchor_is_inner_rejects_unknown_layer():
     hit = np.array([[30.0, 0.0, 1.0]])
-    try:
+    with pytest.raises(ValueError):
         anchor_is_inner(anchor=hit, other=hit, layer=np.array([0]))
-    except ValueError:
-        return
-    raise AssertionError("layer 0 should raise ValueError")
 
 
-def test_hit_sim_pairs():
-    # MD 0: anchor hit 10 (sim 5), other hit 11 (no sim): mixed sim + noise
-    # MD 1: anchor hit 10 again (shared with MD 0), other hit 12 with two sims
-    pairs = hit_sim_pairs(
-        anchor_hit=np.array([10, 10]),
-        other_hit=np.array([11, 12]),
-        anchor_sims=ak.Array([[5], [5]]),
-        other_sims=ak.Array([[], [7, 5]]),
+def test_hit_simIdxs():
+    # MD 0: anchor inner; anchor hit with sim 5, other hit with no sim
+    # MD 1: other inner; anchor hit with sim 5, other hit with sims 7 and 5 (LST's order is kept)
+    inner, outer = hit_simIdxs(
+        anchor_simIdxs=ak.Array([[5], [5]]),
+        other_simIdxs=ak.Array([[], [7, 5]]),
+        anchor_inner=np.array([True, False]),
     )
-    assert np.array_equal(pairs, [[10, 5], [12, 5], [12, 7]])
-    assert pairs.dtype == np.int64
+    # Width 2: the most sims of any hit
+    assert np.array_equal(inner, [[5, UNMATCHED], [7, 5]])
+    assert np.array_equal(outer, [[UNMATCHED, UNMATCHED], [5, UNMATCHED]])
+
+
+def test_hit_simIdxs_no_sims():
+    # No hit has a sim: width 0
+    inner, outer = hit_simIdxs(
+        anchor_simIdxs=ak.Array([[], []]),
+        other_simIdxs=ak.Array([[], []]),
+        anchor_inner=np.array([True, False]),
+    )
+    assert inner.shape == (2, 0)
+    assert outer.shape == (2, 0)
 
 
 def test_order_hits_barrel_uses_rt():
@@ -114,55 +124,62 @@ def test_md_track_estimates():
     assert np.allclose(estimates, [[0.2, 0.5], [-1.5, 0.0]])
 
 
-def test_write_manifest():
-    with tempfile.TemporaryDirectory() as output:
-        events = [
-            ("/data/allsim/a.root", 0, os.path.join(output, "train", "event_0.pt")),
-            ("/data/allsim/a.root", 1, os.path.join(output, "val", "event_1.pt")),
-        ]
-        write_manifest(events=events, output=output)
-        with open(os.path.join(output, "manifest.txt")) as f:
-            lines = f.read().splitlines()
+FILES = [
+    InputFile(lstntuple_path="/data/allsim/a.root", dataset="train", n_entries=2),
+    InputFile(lstntuple_path="/data/allsim/b.root", dataset="val", n_entries=1),
+]
+
+
+def test_write_manifest(tmp_path):
+    output = str(tmp_path)
+    write_manifest(files=FILES, output=output)
+    with open(os.path.join(output, "manifest.txt")) as f:
+        lines = f.read().splitlines()
     # The file name only: the directory is left out
     assert lines == [
-        "event_file=event_0.pt event_set=train lstntuple_file=a.root lstntuple_entry=0",
-        "event_file=event_1.pt event_set=val lstntuple_file=a.root lstntuple_entry=1",
+        "dataset=train lstntuple_file=a.root n_entries=2",
+        "dataset=val lstntuple_file=b.root n_entries=1",
     ]
 
 
-def test_assign_sets_exact_sizes():
-    sets = assign_sets(
-        n_events=4400,
-        train=0.6,
+def test_plan_jobs(tmp_path):
+    output = str(tmp_path)
+    jobs = plan_jobs(files=FILES, output=output)
+    assert sorted(os.listdir(output)) == ["test", "train", "val"]
+    assert [
+        (job.lstntuple_path, job.lstntuple_entry, job.output_file) for job in jobs
+    ] == [
+        ("/data/allsim/a.root", 0, os.path.join(output, "train", "a.entry_0.pt")),
+        ("/data/allsim/a.root", 1, os.path.join(output, "train", "a.entry_1.pt")),
+        ("/data/allsim/b.root", 0, os.path.join(output, "val", "b.entry_0.pt")),
+    ]
+    # A second production into the same output refuses to start
+    with pytest.raises(FileExistsError):
+        plan_jobs(files=FILES, output=output)
+
+
+def test_assign_datasets_exact_sizes():
+    datasets = assign_datasets(
+        n_files=44,
+        train=0.7,
         val=0.15,
-        tune=0.05,
-        test=0.2,
+        test=0.15,
         seed=42,
     )
-    assert sets.count("train") == 2640
-    assert sets.count("val") == 660
-    assert sets.count("tune") == 220
-    assert sets.count("test") == 880
+    # round(0.15 * 44) = 7
+    assert datasets.count("train") == 30
+    assert datasets.count("val") == 7
+    assert datasets.count("test") == 7
 
 
-def test_assign_sets_same_seed_same_sets():
-    first = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=1)
-    same = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=1)
-    other = assign_sets(n_events=100, train=0.6, val=0.15, tune=0.05, test=0.2, seed=2)
+def test_assign_datasets_same_seed_same_datasets():
+    first = assign_datasets(n_files=44, train=0.7, val=0.15, test=0.15, seed=1)
+    same = assign_datasets(n_files=44, train=0.7, val=0.15, test=0.15, seed=1)
+    other = assign_datasets(n_files=44, train=0.7, val=0.15, test=0.15, seed=2)
     assert first == same
     assert first != other
 
 
-def test_assign_sets_rejects_fractions_not_summing_to_one():
-    try:
-        assign_sets(n_events=10, train=0.8, val=0.15, tune=0.05, test=0.2, seed=1)
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
-
-
-if __name__ == "__main__":
-    for name, func in list(globals().items()):
-        if name.startswith("test_"):
-            func()
-            print(f"{name}: passed")
+def test_assign_datasets_rejects_fractions_not_summing_to_one():
+    with pytest.raises(ValueError):
+        assign_datasets(n_files=10, train=0.8, val=0.15, test=0.15, seed=1)
