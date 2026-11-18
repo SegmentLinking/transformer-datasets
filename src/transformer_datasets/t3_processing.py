@@ -1,4 +1,5 @@
 import os
+import random
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import wait, FIRST_COMPLETED
 from argparse import ArgumentParser
@@ -10,59 +11,71 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-import hashlib
-
 from transformer_datasets.constants import SIM_VARS, T3_VARS, T3_HIT_SIMIDX, T3_HIT_LAYER, T3_PMATCHED, LS_INDEX, LS_VARS, MD_VARS, MD_INDEX
 from transformer_datasets.constants import TARGET, FAKE_TARGET, LAYER_INFO, MD_SIMIDX, ALL_COLUMNS, MIN_T3_PT, MAX_T3_PT, UNMATCHED
 from transformer_datasets.constants import N_T3_MDS, MD_HIT_INDEX
 
 
+DATASETS = ["train", "val", "test"]
+
+
 class GraphBuilder:
-    def __init__(self, input_paths, output_path, train_split=0.8):
+    def __init__(
+        self,
+        input_paths: list[str],
+        output_path: str,
+        train: float,
+        val: float,
+        test: float,
+        seed: int | None,
+    ) -> None:
+        """
+        Each input LSTNtuple goes whole into one dataset (train, val or test), see assign_datasets.
+
+        An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, and
+        <output>/{train,val,test}.txt list each dataset's LSTNtuple file names, one per line.
+        Inputs are sorted by file name first, so the datasets depend only on the seed and the
+        set of files, not on the order of --input.
+        """
         self.output_path = output_path
-        self.train_split = train_split
-        
-        if not os.path.exists(self.output_path):
-            os.makedirs(self.output_path)
-            
-        self.train_path = os.path.join(self.output_path, "train")
-        self.val_path = os.path.join(self.output_path, "val")
-        os.makedirs(self.train_path, exist_ok=True)
-        os.makedirs(self.val_path, exist_ok=True)
+        for dataset in DATASETS:
+            os.makedirs(os.path.join(self.output_path, dataset), exist_ok=True)
 
         if isinstance(input_paths, str):
             input_paths = [input_paths]
-        self.input_trees = [uproot.open(p)["tree"] for p in input_paths]
+        self.input_paths = sorted(input_paths, key=os.path.basename)
+        self.datasets = assign_datasets(
+            n_files=len(self.input_paths),
+            train=train,
+            val=val,
+            test=test,
+            seed=seed,
+        )
+        self.input_trees = [uproot.open(p)["tree"] for p in self.input_paths]
+        self.write_file_lists()
+
+    def write_file_lists(self) -> None:
+        """Write <output>/<dataset>.txt for each dataset: its LSTNtuple file names, one per line."""
+        for dataset in DATASETS:
+            path = os.path.join(self.output_path, f"{dataset}.txt")
+            fnames = [
+                os.path.basename(input_path)
+                for input_path, file_dataset in zip(self.input_paths, self.datasets)
+                if file_dataset == dataset
+            ]
+            with open(path, "w") as list_file:
+                for fname in fnames:
+                    list_file.write(f"{fname}\n")
+            print(f"[done] output={path} n_files={len(fnames)}")
+
+    def output_file(self, i_file: int, entry: int) -> str:
+        """<output>/<dataset>/<LSTNtuple name>.entry_<N>.pt for entry N of input file i_file."""
+        basename = os.path.basename(self.input_paths[i_file])
+        return os.path.join(self.output_path, self.datasets[i_file], f"{basename}.entry_{entry}.pt")
 
     @staticmethod
     def _to_tensor(values, dtype=torch.float32):
         return torch.as_tensor(np.asarray(values), dtype=dtype)
-
-    @staticmethod
-    def _extract_graph_index(filename):
-        if not (filename.startswith("graph_") and filename.endswith(".pt")):
-            return None
-
-        idx_str = filename[len("graph_"):-len(".pt")]
-        if not idx_str.isdigit():
-            return None
-        return int(idx_str)
-
-    def _load_existing_graph_indices(self):
-        existing = set()
-
-        for directory in (self.train_path, self.val_path):
-            if not os.path.isdir(directory):
-                continue
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    if not entry.is_file():
-                        continue
-                    idx = self._extract_graph_index(entry.name)
-                    if idx is not None:
-                        existing.add(idx)
-
-        return existing
 
     def _iter_selected_events(self, tree, num_events, selected_local_indices, chunk_size):
         """Yield selected events while reading ROOT arrays in chunks."""
@@ -88,25 +101,9 @@ class GraphBuilder:
                 yield local_idx, batch[offset: offset + 1]
                 selected_ptr += 1
 
-    def process_event(self, event_data, idx, args):
-        """Processes a single event and saves the graph."""
+    def process_event(self, event_data, output_file, args):
+        """Processes a single event and saves the graph to output_file."""
         try:
-            if split_value(idx, args.seed) < self.train_split:
-                output_file = os.path.join(self.train_path, f"graph_{idx}.pt")
-            else:
-                output_file = os.path.join(self.val_path, f"graph_{idx}.pt")
-
-            if args.debug:
-                ...
-            elif not args.overwrite:
-                train_exists = os.path.exists(os.path.join(self.train_path, f"graph_{idx}.pt"))
-                val_exists = os.path.exists(os.path.join(self.val_path, f"graph_{idx}.pt"))
-                if not (train_exists or val_exists):
-                    pass
-                else:
-                    print(f"Graph {idx} already exists, skipping...")
-                    return
-
             t3_df = ak.to_dataframe(event_data[T3_VARS])
             pt_mask = (t3_df["t3_pt"] < MAX_T3_PT) & (t3_df["t3_pt"] > MIN_T3_PT)
 
@@ -134,7 +131,7 @@ class GraphBuilder:
             pMatched_ntuple = ak.to_dataframe(event_data[T3_PMATCHED]).values.flatten()
             n_mismatch = np.sum(~np.isclose(pMatched_by_hand, pMatched_ntuple, atol=1e-4))
             if n_mismatch > 0:
-                raise ValueError(f"Mismatch between calculated pMatched and ntuple pMatched for graph {idx}")
+                raise ValueError(f"Mismatch between calculated pMatched and ntuple pMatched for {output_file}")
             hit_simIdx = hit_simIdx[pt_mask]
             hit_layer_all = ak.to_dataframe(event_data[T3_HIT_LAYER]).values
             hit_layer = hit_layer_all[pt_mask]
@@ -182,24 +179,17 @@ class GraphBuilder:
                 return
 
             torch.save(graph, output_file)
-            print(f"Processed graph {idx}")
+            print(f"Processed {output_file}")
 
         except Exception as e:
-            print(f"Error processing graph {idx}: {e}")
+            print(f"Error processing {output_file}: {e}")
 
     def process_events_in_parallel(self, args):
         n_cpu = os.cpu_count() or 1
         n_workers = min(args.n_workers, max(1, n_cpu // 2)) if not args.debug else 1
         chunk_size = 1 if args.debug else max(1, args.chunk_size)
         max_pending = max(1, n_workers * 4)
-        global_idx = 0
         skipped_existing = 0
-
-        existing_indices = set()
-        if not args.overwrite:
-            existing_indices = self._load_existing_graph_indices()
-            if existing_indices:
-                print(f"Found {len(existing_indices)} existing graphs. Pre-skipping before ROOT I/O.")
 
         # Parallelism comes from the process pool, so each worker runs torch single-threaded.
         # Otherwise every worker starts one thread per core, which on many-core nodes hits the
@@ -210,24 +200,22 @@ class GraphBuilder:
             initargs=(1,),
         ) as executor:
             pending = set()
-            for tree in self.input_trees:
+            for i_file, tree in enumerate(self.input_trees):
                 tree_entries = int(tree.num_entries)
                 num_events = tree_entries if args.n_events == -1 else min(args.n_events, tree_entries)
                 if args.debug:
                     num_events = 1
 
-                tree_global_start = global_idx
                 selected_local_indices = []
                 for local_idx in range(num_events):
-                    abs_idx = tree_global_start + local_idx
-                    if args.overwrite or abs_idx not in existing_indices:
+                    if args.debug or args.overwrite or not os.path.exists(self.output_file(i_file, local_idx)):
                         selected_local_indices.append(local_idx)
                     else:
                         skipped_existing += 1
 
                 for local_idx, event_data in self._iter_selected_events(tree, num_events, selected_local_indices, chunk_size):
-                    abs_idx = tree_global_start + local_idx
-                    future = executor.submit(self.process_event, event_data, abs_idx, args)
+                    output_file = self.output_file(i_file, local_idx)
+                    future = executor.submit(self.process_event, event_data, output_file, args)
                     pending.add(future)
 
                     if len(pending) >= max_pending:
@@ -241,26 +229,42 @@ class GraphBuilder:
                 if args.debug:
                     break
 
-                global_idx += num_events
-
             if pending:
                 done, _ = wait(pending)
                 for finished in done:
                     finished.result()
 
         if skipped_existing:
-            print(f"Skipped {skipped_existing} existing graph indices before read/submit.")
+            print(f"Skipped {skipped_existing} existing graphs before read/submit.")
 
 
-def split_value(idx: int, seed: int) -> float:
+def assign_datasets(
+    n_files: int,
+    train: float,
+    val: float,
+    test: float,
+    seed: int | None,
+) -> list[str]:
     """
-    Deterministic number in [0, 1) for the train/val split of graph idx.
+    The dataset ("train", "val" or "test") of each file, shape (n_files,).
 
-    It depends only on (seed, idx), so an event goes to the same split for any number of
-    workers and any processing order. Events with split_value < train_split go to train.
+    Exact sizes: round(fraction * n_files) files for val and test, and the rest for train. Files are shuffled with
+    seed before the datasets are cut, so the same seed and n_files always give the same datasets.
     """
-    digest = hashlib.blake2b(f"{seed}:{idx}".encode(), digest_size=8).digest()
-    return int.from_bytes(digest, "little") / 2**64
+    if abs(train + val + test - 1) > 1e-9:
+        raise ValueError(
+            f"dataset fractions must sum to 1, got train={train} val={val} test={test}"
+        )
+    n_val = round(val * n_files)
+    n_test = round(test * n_files)
+    n_train = n_files - n_val - n_test
+    labels = ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
+    order = list(range(n_files))
+    random.Random(seed).shuffle(order)
+    datasets = [""] * n_files
+    for i_file, label in zip(order, labels):
+        datasets[i_file] = label
+    return datasets
 
 
 def unique_t3_md_indices(md_idx: np.ndarray) -> np.ndarray:
@@ -431,15 +435,25 @@ if __name__ == "__main__":
     argparser.add_argument("--debug", action="store_true")
     argparser.add_argument("--overwrite", action="store_true", help="Overwrite existing graphs")
     argparser.add_argument("--n_events", type=int, default=-1, help="Maximum number of events to process (-1 for all)")
-    argparser.add_argument("--split", type=float, default=0.8, help="Train/val split ratio")
     argparser.add_argument("--nofakes", action="store_true", help="Exclude fake hits from the graphs")
     argparser.add_argument("--chunk_size", type=int, default=256, help="Number of events to read per ROOT I/O chunk")
-    argparser.add_argument("--seed", type=int, default=0,
-                           help="Seed of the train/val split (deterministic per graph index; see split_value)")
+    argparser.add_argument("--train", type=float, default=0.7, help="Training fraction of files")
+    argparser.add_argument("--val", type=float, default=0.15,
+                           help="Validation fraction of files (training loss, early stopping)")
+    argparser.add_argument("--test", type=float, default=0.15, help="Test fraction of files (reported numbers)")
+    argparser.add_argument("--seed", type=int, default=None,
+                           help="Seed for the datasets (see assign_datasets); set it to make the split reproducible")
     args = argparser.parse_args()
 
     if not os.path.exists(args.output):
         os.makedirs(args.output)
     
-    training_data = GraphBuilder(args.input, args.output, args.split)
+    training_data = GraphBuilder(
+        input_paths=args.input,
+        output_path=args.output,
+        train=args.train,
+        val=args.val,
+        test=args.test,
+        seed=args.seed,
+    )
     training_data.process_events_in_parallel(args)
