@@ -4,18 +4,17 @@ Build one MD-level dataset file per event from an LSTNtuple.
 Each output file is a plain dict of tensors, saved with torch.save and readable with
 torch.load(path, weights_only=True):
 
-    x:            float32 (n_md, 10): [layer, rt, cosphi, sinphi, z, drt, dphi, dz, eta, qoverpt]
-    sim_index:    int64   (n_md,):   md_simIdx, UNMATCHED for fake MDs
-    sim_features: float32 (n_md, 10): MD_SIM_VARS of the matched sim track, UNMATCHED for fake MDs
-    hit_index:    int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
-    hit_inner_simIdxs: int32 (n_md, n_max_simIdxs): sims of the inner hit (md_anchor_simIdxs or md_other_simIdxs),
-                  padded with UNMATCHED. n_max_simIdxs is the most sims of any hit in the event.
-    hit_outer_simIdxs: int32 (n_md, n_max_simIdxs): the same for the outer hit
+    md_features:      float32 (n_md, 10): [layer, rt, cosphi, sinphi, z, drt, dphi, dz, eta, qoverpt]
+    md_simIdx:        int64   (n_md,):   md_simIdx, UNMATCHED for fake MDs
+    md_simFeatures:   float32 (n_md, 10): ALL_SIM_VARS of the matched sim track, UNMATCHED for fake MDs
+    md_hitIdx:        int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
+    md_inner_simIdxs: int32   (n_md, n_max_simIdxs): sims of the inner hit, padded with UNMATCHED.
+    md_outer_simIdxs: int32.  (n_md, n_max_simIdxs): the same for the outer hit
     lstntuple_file:  str: file name (no directory) of the LSTNtuple the event was read from
     lstntuple_entry: int: entry of the event in that LSTNtuple
 
-Each LSTNtuple file goes whole into one dataset (train, val or test), so events of one file never straddle datasets.
-An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, e.g. train/LSTNtuple_X.entry_7.pt.
+Each LSTNtuple file goes whole into one dataset (train, val or test).
+An event is written as <output>/<dataset>/<LSTNtuple name>.entry_<N>.pt, e.g. train/LSTNtuple_XXXX.entry_7.pt.
 
 <output>/train.txt, val.txt and test.txt list each dataset's LSTNtuple files, one file name per line, e.g.
     LSTNtuple_X.root
@@ -25,7 +24,7 @@ The lists record the LSTNtuple's file name, not its directory: the same input ex
 
 The inner hit is the one with smaller rt in the barrel and smaller |z| in the endcap.
 Pixel LS MDs (md_isPLS) are discarded.
-Use hit_index and hit_{inner,outer}_simIdxs for hit-level matching.
+Use md_hitIdx and md_{inner,outer}_simIdxs for hit-level matching.
 Needs an LSTNtuple with the md_{anchor,other}_{hitIdx,simIdxs} branches.
 """
 
@@ -50,17 +49,16 @@ MD_COLUMNS = (
     + ["md_layer", "md_isPLS", "md_simIdx", "md_anchor_hitIdx", "md_other_hitIdx"]
     + ["md_eta", "md_dphichange"]
 )
-# Jagged: a list of sims per MD
 MD_HIT_SIMS = ["md_anchor_simIdxs", "md_other_simIdxs"]
-MD_SIM_VARS = SIM_VARS + ["sim_event", "sim_bunchCrossing"]
-COLUMNS = MD_COLUMNS + MD_HIT_SIMS + MD_SIM_VARS
+ALL_SIM_VARS = SIM_VARS + ["sim_event", "sim_bunchCrossing"]
+COLUMNS = MD_COLUMNS + MD_HIT_SIMS + ALL_SIM_VARS
 
-BARREL_LAYERS = range(1, 7)
-ENDCAP_LAYERS = range(7, 12)
-# Curvature constant (speed of light * B / 2) in GeV^-1 cm^-1, k2Rinv1GeVf in LSTCore interface/alpaka/Common.h
+# Curvature constant (speed of light * B / 2)
 K2RINV_1GEV = 2.99792458e-3 * 3.8 / 2
 DATASETS = ["train", "val", "test"]
 DOT_ROOT = ".root"
+BARREL_LAYERS = range(1, 7)
+ENDCAP_LAYERS = range(7, 12)
 
 
 @dataclass
@@ -271,46 +269,44 @@ def process_event(
     other_hit = md["md_other_hitIdx"][keep]
 
     inner, outer = order_hits(anchor=anchor, other=other, layer=layer)
-    x = md_features(inner=inner, outer=outer, layer=layer)
+    md_feats = md_features(inner=inner, outer=outer, layer=layer)
     extra_features = md_extra_features(
         eta=md["md_eta"][keep],
         dphichange=md["md_dphichange"][keep],
         anchor=anchor,
     )
-    x = np.concatenate([x, extra_features], axis=1)
+    md_feats = np.concatenate([md_feats, extra_features], axis=1)
 
     anchor_inner = anchor_is_inner(anchor=anchor, other=other, layer=layer)
-    hit_index = np.where(
+    md_hitIdx = np.where(
         anchor_inner[:, None],
         np.stack([anchor_hit, other_hit], axis=1),
         np.stack([other_hit, anchor_hit], axis=1),
     )
-    hit_inner_simIdxs, hit_outer_simIdxs = hit_simIdxs(
+    md_inner_simIdxs, md_outer_simIdxs = hit_simIdxs(
         anchor_simIdxs=event["md_anchor_simIdxs"][keep],
         other_simIdxs=event["md_other_simIdxs"][keep],
         anchor_inner=anchor_inner,
     )
 
-    sim = np.stack([ak.to_numpy(event[col]) for col in MD_SIM_VARS], axis=1)
-    sim_index = np.where(md_simIdx >= 0, md_simIdx, UNMATCHED)
+    sim_features = np.stack([ak.to_numpy(event[col]) for col in ALL_SIM_VARS], axis=1)
+    md_simIdx = np.where(md_simIdx >= 0, md_simIdx, UNMATCHED)
 
     data = {
-        "x": torch.as_tensor(x, dtype=torch.float32),
-        "sim_index": torch.as_tensor(sim_index, dtype=torch.int64),
-        "sim_features": torch.as_tensor(
-            md_sim_features(md_simIdx=md_simIdx, sim_features=sim),
+        "md_features": torch.as_tensor(md_feats, dtype=torch.float32),
+        "md_simIdx": torch.as_tensor(md_simIdx, dtype=torch.int64),
+        "md_simFeatures": torch.as_tensor(
+            md_sim_features(md_simIdx=md_simIdx, sim_features=sim_features),
             dtype=torch.float32,
         ),
-        "hit_index": torch.as_tensor(hit_index, dtype=torch.int64),
-        "hit_inner_simIdxs": torch.as_tensor(hit_inner_simIdxs, dtype=torch.int32),
-        "hit_outer_simIdxs": torch.as_tensor(hit_outer_simIdxs, dtype=torch.int32),
+        "md_hitIdx": torch.as_tensor(md_hitIdx, dtype=torch.int64),
+        "md_inner_simIdxs": torch.as_tensor(md_inner_simIdxs, dtype=torch.int32),
+        "md_outer_simIdxs": torch.as_tensor(md_outer_simIdxs, dtype=torch.int32),
         "lstntuple_file": os.path.basename(input_path),
         "lstntuple_entry": entry,
     }
     torch.save(data, output_file)
-    print(
-        f"[done] output={output_file} n_md={len(x)} n_max_simIdxs={hit_inner_simIdxs.shape[1]}"
-    )
+    print(f"[done] output={output_file} n_md={len(md_feats)}")
 
 
 def anchor_is_inner(
@@ -415,11 +411,8 @@ def md_sim_features(
 
     Rows of MDs with md_simIdx < 0 are filled with UNMATCHED.
     """
-    result = np.full(
-        (len(md_simIdx), sim_features.shape[1]),
-        UNMATCHED,
-        dtype=np.float32,
-    )
+    n_md, n_sim_vars = len(md_simIdx), sim_features.shape[1]
+    result = np.full((n_md, n_sim_vars), UNMATCHED, dtype=np.float32)
     matched = md_simIdx >= 0
     result[matched] = sim_features[md_simIdx[matched]]
     return result
