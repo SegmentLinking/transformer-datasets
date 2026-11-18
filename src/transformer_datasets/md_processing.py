@@ -56,7 +56,6 @@ COLUMNS = MD_COLUMNS + MD_HIT_SIMS + ALL_SIM_VARS
 # Curvature constant (speed of light * B / 2)
 K2RINV_1GEV = 2.99792458e-3 * 3.8 / 2
 DATASETS = ["train", "val", "test"]
-DOT_ROOT = ".root"
 BARREL_LAYERS = range(1, 7)
 ENDCAP_LAYERS = range(7, 12)
 
@@ -201,10 +200,9 @@ def plan_jobs(
         os.makedirs(os.path.join(output, dataset))
     jobs = []
     for file in files:
-        # /dir/LSTNtuple_X.root -> LSTNtuple_X
-        stem = os.path.basename(file.lstntuple_path).removesuffix(DOT_ROOT)
+        basename = os.path.basename(file.lstntuple_path)
         for entry in range(file.n_entries):
-            output_file = os.path.join(output, file.dataset, f"{stem}.entry_{entry}.pt")
+            output_file = os.path.join(output, file.dataset, f"{basename}.entry_{entry}.pt")
             jobs.append(
                 EventJob(
                     lstntuple_path=file.lstntuple_path,
@@ -247,8 +245,13 @@ def run_jobs(
             )
             for job in jobs
         ]
-        for future in futures:
-            future.result()
+        try:
+            for future in futures:
+                future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
 
 
 def process_event(
@@ -257,6 +260,7 @@ def process_event(
     output_file: str,
 ) -> None:
     with uproot.open(input_path) as f:
+        print(f"[io] input={input_path} entry={entry}")
         event = f["tree"].arrays(COLUMNS, entry_start=entry, entry_stop=entry + 1)[0]
     md = {col: ak.to_numpy(event[col]) for col in MD_COLUMNS}
 
