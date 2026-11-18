@@ -17,7 +17,6 @@ from transformer_datasets.constants import N_T3_MDS, MD_HIT_INDEX
 
 
 DATASETS = ["train", "val", "test"]
-DOT_ROOT = ".root"
 
 
 class GraphBuilder:
@@ -71,9 +70,8 @@ class GraphBuilder:
 
     def output_file(self, i_file: int, entry: int) -> str:
         """<output>/<dataset>/<LSTNtuple name>.entry_<N>.pt for entry N of input file i_file."""
-        # /dir/LSTNtuple_X.root -> LSTNtuple_X
-        stem = os.path.basename(self.input_paths[i_file]).removesuffix(DOT_ROOT)
-        return os.path.join(self.output_path, self.datasets[i_file], f"{stem}.entry_{entry}.pt")
+        basename = os.path.basename(self.input_paths[i_file])
+        return os.path.join(self.output_path, self.datasets[i_file], f"{basename}.entry_{entry}.pt")
 
     @staticmethod
     def _to_tensor(values, dtype=torch.float32):
