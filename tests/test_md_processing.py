@@ -116,12 +116,12 @@ def test_md_extra_features():
     # convention; a straight MD (dphichange = 0) gives q/pT = 0
     anchor = np.array([[30.0, 40.0, 10.0], [30.0, 40.0, 10.0]])
     dphichange = np.array([-np.arcsin(K2RINV_1GEV * 50.0 * 0.5), 0.0])
-    estimates = md_extra_features(
+    extra_features = md_extra_features(
         eta=np.array([0.2, -1.5]),
         dphichange=dphichange,
         anchor=anchor,
     )
-    assert np.allclose(estimates, [[0.2, 0.5], [-1.5, 0.0]])
+    assert np.allclose(extra_features, [[0.2, 0.5], [-1.5, 0.0]])
 
 
 FILES = [
