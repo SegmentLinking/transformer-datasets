@@ -14,7 +14,7 @@ trackingntuple_<name>.root
 LSTNtuple_<name>.root
     │  transformer_datasets.t3_processing (Python)
     ▼
-{train,val}/graph_<N>.pt
+{train,val,test}/LSTNtuple_<name>.entry_<N>.pt
 ```
 
 The first two stages run in a CMSSW environment, which the scripts set up themselves from `/cvmfs` if `cmsRun` or `lst_cpu` isn't already on the `PATH`. Only the last stage is Python.
@@ -69,9 +69,11 @@ cd samples/qcd/
 python -m transformer_datasets.t3_processing --input LSTNtuple_*.root --output graphs/ --seed 42 -n 16
 ```
 
-Run with `--help` for all options (`--n_events`, `--split`, `--nofakes`, `--overwrite`, ...).
+Run with `--help` for all options (`--n_events`, `--train`/`--val`/`--test`, `--nofakes`, `--overwrite`, ...).
 
-Each `graph_<N>.pt` is a `torch_geometric.data.Data`.
+Each input LSTNtuple goes whole into one dataset: `--train`, `--val` and `--test` are fractions of files (default 0.7/0.15/0.15), and `--seed` fixes which files go where. Entry `N` of `LSTNtuple_<name>.root` is written as `graphs/<dataset>/LSTNtuple_<name>.entry_<N>.pt`, and `graphs/{train,val,test}.txt` list each dataset's LSTNtuple file names, one per line.
+
+Each `.pt` file is a `torch_geometric.data.Data`.
 
 transformer-oc depends on the column order of `x`: if you add, remove or reorder features, update the normalization and the η/φ column indices there too.
 
