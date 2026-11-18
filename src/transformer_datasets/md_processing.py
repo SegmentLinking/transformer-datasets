@@ -10,6 +10,7 @@ torch.load(path, weights_only=True):
     md_hitIdx:        int64   (n_md, 2):  LST hit index of the [inner, outer] hit, as in t5_hitIndices
     md_inner_simIdxs: int32   (n_md, n_max_simIdxs): sims of the inner hit, padded with UNMATCHED.
     md_outer_simIdxs: int32.  (n_md, n_max_simIdxs): the same for the outer hit
+    sim_features:     float32 (n_hs, 10): ALL_SIM_VARS of hard-scatter sims, same columns as md_simFeatures
     lstntuple_file:  str: file name (no directory) of the LSTNtuple the event was read from
     lstntuple_entry: int: entry of the event in that LSTNtuple
 
@@ -292,9 +293,13 @@ def process_event(
         other_simIdxs=event["md_other_simIdxs"][keep],
         anchor_inner=anchor_inner,
     )
+    md_simIdx = np.where(md_simIdx >= 0, md_simIdx, UNMATCHED)
 
     sim_features = np.stack([ak.to_numpy(event[col]) for col in ALL_SIM_VARS], axis=1)
-    md_simIdx = np.where(md_simIdx >= 0, md_simIdx, UNMATCHED)
+    sim_hard_scatter = (
+        (ak.to_numpy(event["sim_event"]) == 0) &
+        (ak.to_numpy(event["sim_bunchCrossing"]) == 0)
+    )
 
     data = {
         "md_features": torch.as_tensor(md_feats, dtype=torch.float32),
@@ -306,6 +311,7 @@ def process_event(
         "md_hitIdx": torch.as_tensor(md_hitIdx, dtype=torch.int64),
         "md_inner_simIdxs": torch.as_tensor(md_inner_simIdxs, dtype=torch.int32),
         "md_outer_simIdxs": torch.as_tensor(md_outer_simIdxs, dtype=torch.int32),
+        "sim_features": torch.as_tensor(sim_features[sim_hard_scatter], dtype=torch.float32),
         "lstntuple_file": os.path.basename(input_path),
         "lstntuple_entry": entry,
     }
