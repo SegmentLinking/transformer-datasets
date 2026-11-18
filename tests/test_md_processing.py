@@ -148,9 +148,9 @@ def test_plan_jobs(tmp_path):
     assert [
         (job.lstntuple_path, job.lstntuple_entry, job.output_file) for job in jobs
     ] == [
-        ("/data/allsim/a.root", 0, os.path.join(output, "train", "a.entry_0.pt")),
-        ("/data/allsim/a.root", 1, os.path.join(output, "train", "a.entry_1.pt")),
-        ("/data/allsim/b.root", 0, os.path.join(output, "val", "b.entry_0.pt")),
+        ("/data/allsim/a.root", 0, os.path.join(output, "train", "a.root.entry_0.pt")),
+        ("/data/allsim/a.root", 1, os.path.join(output, "train", "a.root.entry_1.pt")),
+        ("/data/allsim/b.root", 0, os.path.join(output, "val", "b.root.entry_0.pt")),
     ]
     # A second production into the same output refuses to start
     with pytest.raises(FileExistsError):
